@@ -25,7 +25,7 @@ load_dotenv()
 API_PERIOD  = os.getenv("GMGN_PERIOD", "7d")
 API_TIMEOUT = int(os.getenv("GMGN_TIMEOUT", "30"))
 REQ_DELAY   = float(os.getenv("GMGN_DELAY", "2"))
-MAX_RETRIES = int(os.getenv("GMGN_RETRIES", "10"))
+MAX_RETRIES = int(os.getenv("GMGN_RETRIES", "20"))
 SHOW_BODY   = int(os.getenv("GMGN_SHOW_BODY", "300"))
 # ───────────────────────────────────────────────────────────────────────
 
