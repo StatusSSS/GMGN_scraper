@@ -70,7 +70,7 @@ def main():
     ]
 
     # запускаем максимум по 4 параллельных запроса
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=1) as pool:
         futures = []
         for wallet in wallets:
             futures.append(pool.submit(fetch_wallet_stat, wallet))

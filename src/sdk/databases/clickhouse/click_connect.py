@@ -28,11 +28,11 @@ class ClickHouseDB:
             username=username,
             password=password,
             database=database,
-            secure=secure,
-            compress=compress,
+            secure=secure,      # True → https (порт обычно 8443)
+            compress=compress,  # 'gzip', 'lz4' … (опционально)
         )
 
-
+    # ---------- базовые методы ----------
     def command(self, query: str, params: dict | None = None) -> Any:
         """
         Выполняет DDL или INSERT/DELETE и возвращает int | None
@@ -68,7 +68,7 @@ class ClickHouseDB:
 def get_db() -> ClickHouseDB:
     return ClickHouseDB(
         host=os.getenv("CLICKHOUSE_HOST", "localhost"),
-        port=int(os.getenv("CLICKHOUSE_PORT", 8123)),
+        port=int(os.getenv("CLICKHOUSE_PORT", 8123)),   # HTTP/HTTPS
         username=os.getenv("CLICKHOUSE_USER", "default"),
         password=os.getenv("CLICKHOUSE_PASSWORD", ""),
         database=os.getenv("CLICKHOUSE_DB", "default"),
