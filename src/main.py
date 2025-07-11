@@ -33,7 +33,7 @@ API_PERIOD   = os.getenv("GMGN_PERIOD", "7d")
 API_TIMEOUT  = int(os.getenv("GMGN_TIMEOUT", "30"))
 REQ_DELAY    = float(os.getenv("GMGN_DELAY", "2"))
 MAX_RETRIES  = int(os.getenv("GMGN_RETRIES", "20"))
-MAX_WORKERS  = int(os.getenv("GMGN_WORKERS", "20"))
+MAX_WORKERS  = int(os.getenv("GMGN_WORKERS", "5"))
 SHOW_BODY    = int(os.getenv("GMGN_SHOW_BODY", "300"))
 
 HEADERS_BASE = {
@@ -130,6 +130,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
                     proxies=proxies,
                 )
                 resp.raise_for_status()
+                print(resp.text)
                 return resp.json()
 
             except HTTPError as e:
