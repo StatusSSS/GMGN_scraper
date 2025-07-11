@@ -115,22 +115,27 @@ async def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
 
         host, port, user, pwd = proxy_str.split(":", 3)
         proxy_url = f"http://{user}:{pwd}@{host}:{port}"
-        url       = f"https://gmgn.ai/api/v1/wallet_stat/sol/{wallet}/{API_PERIOD}"
-        headers   = {**HEADERS_BASE, "referer": f"https://gmgn.ai/sol/address/{wallet}"}
+        url = f"https://gmgn.ai/api/v1/wallet_stat/sol/{wallet}/{API_PERIOD}"
+        headers = {**HEADERS_BASE, "referer": f"https://gmgn.ai/sol/address/{wallet}"}
 
-        async with httpx.AsyncClient(http2=True, timeout=API_TIMEOUT) as client:
+        # ① создаём транспорт, привязанный к proxy_url
+        transport = httpx.AsyncHTTPTransport(proxy=proxy_url)
+
+        # ② передаём этот транспорт клиенту
+        async with httpx.AsyncClient(
+                transport=transport,
+                timeout=API_TIMEOUT,
+                http2=True,
+        ) as client:
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
-                    r = await client.get(url,
-                                         headers=headers,
-                                         params=PARAMS_BASE,
-                                         proxies=proxy_url)
+                    r = await client.get(url, headers=headers, params=PARAMS_BASE)
                     r.raise_for_status()
                     return r.json()
 
                 except httpx.HTTPStatusError as e:
                     log_http_error(e, wallet, attempt, proxy_str)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     print(f"[{wallet}] попытка {attempt} через {proxy_str}: "
                           f"{type(exc).__name__}: {exc}")
 
