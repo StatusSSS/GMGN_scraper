@@ -130,7 +130,6 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
                     proxies=proxies,
                 )
                 resp.raise_for_status()
-                print(resp.text)
                 return resp.json()
 
             except HTTPError as e:
@@ -158,6 +157,8 @@ async def process_wallet(worker_id: int, wallet: str) -> None:
     loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(None, fetch_wallet_stat, worker_id, wallet)
     if data:
+        pnl_value = data["data"]["pnl"]
+        print(f"{pnl_value:.3f}")
         print(f"{wallet[:6]}… ✔")
     else:
         print(f"{wallet[:6]}… ❌")
