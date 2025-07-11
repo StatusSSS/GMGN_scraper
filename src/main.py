@@ -2,12 +2,6 @@
 """
 Async-воркер для gmgn.ai: опрашивает кошельки через HTTP-прокси
 и сохраняет PnL-снимки (pnl > 0.6) в PostgreSQL.
-
- • Кошельки — src/wallets.txt
- • Прокси   — src/proxies.txt
- • Параллельность — до GMGN_WORKERS (по умолчанию 20)
- • Ротация прокси: у воркера есть «свой» прокси; при MAX_RETRIES ошибок
-   он исключается и берётся следующий из пула.
 """
 
 from __future__ import annotations
@@ -59,9 +53,9 @@ PARAMS_BASE = {
 }
 
 # ─── структуры для прокси-ротации ─────────────────────────────
-PROXY_POOL: List[str]           = []
-WORKER_PROXIES: Dict[int, str]  = {}
-PROXY_LOCK  = asyncio.Lock()
+PROXY_POOL: List[str]          = []
+WORKER_PROXIES: Dict[int, str] = {}
+PROXY_LOCK = asyncio.Lock()
 
 FAIL_WALLETS_FILE = "fail_wallets.txt"
 
@@ -111,10 +105,7 @@ def mark_failed_wallet(wallet: str) -> None:
 # ---------------------------------------------------------------------------
 
 async def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
-    """
-    Пытается получить статистику кошелька, перебирая прокси.
-    Возвращает JSON при успехе или None, если все прокси исчерпаны.
-    """
+    """Получает статистику кошелька, перебирая прокси-список."""
     async with PROXY_LOCK:
         proxies_to_try = [WORKER_PROXIES[worker_id]] + PROXY_POOL.copy()
 
@@ -127,12 +118,13 @@ async def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
         url       = f"https://gmgn.ai/api/v1/wallet_stat/sol/{wallet}/{API_PERIOD}"
         headers   = {**HEADERS_BASE, "referer": f"https://gmgn.ai/sol/address/{wallet}"}
 
-        async with httpx.AsyncClient(proxies=proxy_url,
-                                     timeout=API_TIMEOUT,
-                                     http2=True) as client:
+        async with httpx.AsyncClient(http2=True, timeout=API_TIMEOUT) as client:
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
-                    r = await client.get(url, headers=headers, params=PARAMS_BASE)
+                    r = await client.get(url,
+                                         headers=headers,
+                                         params=PARAMS_BASE,
+                                         proxies=proxy_url)
                     r.raise_for_status()
                     return r.json()
 
@@ -142,9 +134,9 @@ async def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
                     print(f"[{wallet}] попытка {attempt} через {proxy_str}: "
                           f"{type(exc).__name__}: {exc}")
 
-                await asyncio.sleep(1.5)  # back-off
+                await asyncio.sleep(1.5)
 
-        # proxy исчерпана
+        # прокси исчерпана
         mark_failed_wallet(wallet)
         async with PROXY_LOCK:
             if proxy_str in PROXY_POOL:
@@ -159,13 +151,12 @@ async def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 async def save_snapshot(address: str, pnl: float) -> None:
-    """INSERT INTO wallet_snapshot (address, pnl, ts_utc) VALUES (…)"""
     async with AsyncSessionLocal() as session:
         session.add(WalletSnapshot(address=address, pnl=pnl))
         try:
             await session.commit()
         except IntegrityError:
-            await session.rollback()   # дубликат? спокойно игнорируем
+            await session.rollback()
 
 async def process_wallet(worker_id: int, wallet: str) -> None:
     data = await fetch_wallet_stat(worker_id, wallet)
@@ -194,8 +185,8 @@ async def parallel_mode(wallets: List[str], proxies: List[str]) -> None:
 
     n = min(MAX_WORKERS, len(proxies), len(wallets))
     initial = proxies[:n]
-    PROXY_POOL      = proxies[n:]
-    WORKER_PROXIES  = {i: initial[i] for i in range(n)}
+    PROXY_POOL     = proxies[n:]
+    WORKER_PROXIES = {i: initial[i] for i in range(n)}
 
     chunks = [wallets[i::n] for i in range(n)]
     await asyncio.gather(*(worker_chunk(i, chunks[i]) for i in range(n)))
