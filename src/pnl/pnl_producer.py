@@ -114,7 +114,6 @@ def consume_tokens() -> None:
             continue
 
         wallets = [row["signing_wallet"] for row in rows]
-        print(wallets[0])
         push_wallets_to_redis(wallets, token=token, src_flag=src_flag)
         print(
             f"📬  {src_flag} token={token} → {len(wallets)} кошельков отправлено в {WALLETS_QUEUE}"
