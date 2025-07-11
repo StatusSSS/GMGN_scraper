@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, DateTime, Integer, String, Numeric,
-    UniqueConstraint, create_engine
+    UniqueConstraint, create_engine, TIMESTAMP
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import NUMERIC
@@ -27,7 +27,7 @@ class WalletSnapshot(Base):
     ts_utc:  Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=datetime.utcnow,
-        nullable=False
+        nullable=True
     )
 
     profit_factor:        Mapped[float] = mapped_column(NUMERIC(18, 8))
@@ -55,3 +55,28 @@ class WalletSnapshot(Base):
         )
 
 
+class Wallet(Base):
+    """
+    Справочник Solana-кошельков.
+    Одна строка — один уникальный адрес.
+    """
+    __tablename__ = "wallets"
+    __table_args__ = (
+        UniqueConstraint("address", name="uix_wallets_address"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    address: Mapped[str] = mapped_column(String(64), nullable=False, index=True, unique=True)
+
+    # последняя зафиксированная метрика PnL (или NULL, если ещё не считали)
+    pnl: Mapped[float | None] = mapped_column(NUMERIC(18, 2))
+
+    # когда адрес проверяли в последний раз
+    last_check: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=datetime.utcnow,
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"<Wallet {self.address} pnl={self.pnl} at {self.last_check}>"

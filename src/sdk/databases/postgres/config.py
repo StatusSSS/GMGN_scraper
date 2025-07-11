@@ -31,9 +31,7 @@ class DBConfig(BaseSettings):
         Пример:
         postgresql+asyncpg://user:pass@host:5432/db?sslmode=require&channel_binding=require
         """
-        print(f"postgresql+asyncpg://{self.user}:{self.password}"
-            f"@{self.host}:{self.port}/{self.db}"
-            "?ssl=require")
+
         return (
             f"postgresql+asyncpg://{self.user}:{self.password}"
             f"@{self.host}:{self.port}/{self.db}"

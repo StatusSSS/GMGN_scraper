@@ -33,7 +33,7 @@ from sqlalchemy.exc import IntegrityError
 
 # ─── PostgreSQL SDK ───────────────────────────────────────────────────────
 from src.sdk.databases.postgres.dependency import with_db_session
-from src.sdk.databases.postgres.models import WalletSnapshot
+from src.sdk.databases.postgres.models import Wallet
 
 load_dotenv()
 
@@ -41,7 +41,7 @@ API_PERIOD = os.getenv("GMGN_PERIOD", "7d")
 API_TIMEOUT = int(os.getenv("GMGN_TIMEOUT", "30"))
 REQ_DELAY = float(os.getenv("GMGN_DELAY", "2"))
 MAX_RETRIES = int(os.getenv("GMGN_RETRIES", "20"))
-MAX_WORKERS = int(os.getenv("GMGN_WORKERS", "5"))
+MAX_WORKERS = int(os.getenv("GMGN_WORKERS", "20"))
 SHOW_BODY = int(os.getenv("GMGN_SHOW_BODY", "300"))
 
 HEADERS_BASE = {
@@ -123,7 +123,7 @@ async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session
     if pnl_value <= 0.6:
         return
 
-    snapshot = WalletSnapshot(
+    snapshot = Wallet(
         address=wallet,
         pnl=round(pnl_value, 3),  # 12.345678 → 12.346
         # ts_utc берётся из default=datetime.utcnow в модели
