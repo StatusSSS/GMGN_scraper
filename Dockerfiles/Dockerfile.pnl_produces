@@ -1,0 +1,24 @@
+# ----- базовый образ -------------------------------------------------
+FROM python:3.11-slim
+
+# ----- системные пакеты (curl_cffi → libcurl) ------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libcurl4-openssl-dev \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ----- рабочая папка -------------------------------------------------
+WORKDIR /src
+
+# ----- зависимости Python -------------------------------------------
+COPY ../requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ----- исходники -----------------------------------------------------
+COPY . .
+
+ENV PYTHONUNBUFFERED=1
+
+# Команда задаётся в docker-compose (producer/worker разные)
+CMD ["python", "-m", "src.pnl.pnl_producer"]

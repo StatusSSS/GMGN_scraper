@@ -1,0 +1,74 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  selenium:
+    image: selenium/standalone-chrome:4.21.0-20240521
+    shm_size: "2g"
+    ports:
+      - "4444:4444"
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'" ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  scraper:
+    build: .
+    depends_on:
+      selenium:
+        condition: service_healthy
+    environment:
+      - SELENIUM_SERVER_URL=http://selenium:4444
+    volumes:
+      - ./output:/app/output
+
+  producer:
+    build:
+      context: .
+      dockerfile: Dockerfiles/Dockerfile.pnl_produces
+    command: >
+      python -m src.pnl.pnl_producer    # ← новый скрипт-продюсер
+    environment:
+      # ---------- ClickHouse ----------
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
+      # ---------- Redis ----------
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # ---------- Пауза между SELECT-ами ----------
+      DELAY_SEC: ${DELAY_SEC:-10}
+    volumes:
+      - ./:/src                         # код + wallets.txt + Dockerfile.pnl_produces в /app
+    depends_on:
+      - redis
+
+  worker:
+    build:
+      context: .
+      dockerfile: ./Dockerfiles/Dockerfile.pnl_produces
+    command: >
+      python -m src.scraper.gmgn.sync_scraper
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RESET_QUEUE: "1"
+    volumes:
+      - ./:/src
+    depends_on:
+      - redis
+      - selenium
+
+volumes:
+  redis-data:
