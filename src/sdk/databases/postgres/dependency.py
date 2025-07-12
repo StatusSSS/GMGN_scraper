@@ -48,8 +48,13 @@ R = TypeVar("R")
 def with_db_session(func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     @functools.wraps(func)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        async with AsyncSessionLocal() as session:
-            kwargs["db_session"] = session
-            return await func(*args, **kwargs)
-
+        async with AsyncSessionLocal() as session:          # соединение из пула
+            try:
+                kwargs["db_session"] = session              # передаём в целевую ф-цию
+                result = await func(*args, **kwargs)
+                await session.commit()                      # один общий commit
+                return result
+            except Exception:
+                await session.rollback()                    # общий rollback
+                raise                                        # пробрасываем дальше
     return wrapper

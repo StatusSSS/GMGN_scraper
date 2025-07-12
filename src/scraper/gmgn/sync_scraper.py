@@ -136,16 +136,14 @@ def rotate_proxy(worker_id: int) -> None:
 async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session) -> None:
     if pnl_value <= 0.6:
         return
+
     snapshot = Wallet(address=wallet, pnl=round(pnl_value, 3))
     db_session.add(snapshot)
-    try:
-        await db_session.commit()
-    except IntegrityError:
-        await db_session.rollback()  # запись уже есть — игнор
-    except Exception:
-        await db_session.rollback()
-        raise
 
+    try:
+        await db_session.flush()        # попытка INSERT — ловим UNIQUE-ошибку
+    except IntegrityError:
+        await db_session.rollback()
 
 # ----------------------------------------------------------------------
 # Single HTTP request (sync, via executor)

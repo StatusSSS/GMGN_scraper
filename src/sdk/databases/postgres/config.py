@@ -19,9 +19,9 @@ class DBConfig(BaseSettings):
     # SQLAlchemy / asyncpg tuning
     echo: bool = False
     pool_pre_ping: bool = True
-    pool_size: int = 4
-    max_overflow: int = 4
-    pool_timeout: int = 10
+    pool_size: int = 20
+    max_overflow: int = 20
+    pool_timeout: int = 30
     pool_recycle: int = 600          # секунд
     isolation_level: str = "READ COMMITTED"
 
