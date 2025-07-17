@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   redis:
     image: redis:7-alpine
@@ -36,21 +34,21 @@ services:
       context: .
       dockerfile: Dockerfiles/Dockerfile.pnl_produces
     command: >
-      python -m src.pnl.pnl_producer    # ← новый скрипт-продюсер
+      python -m src.pnl.pnl_producer
     environment:
-      # ---------- ClickHouse ----------
+
       CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
       CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
-      # ---------- Redis ----------
+
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      # ---------- Пауза между SELECT-ами ----------
+
       DELAY_SEC: ${DELAY_SEC:-10}
     volumes:
-      - ./:/src                         # код + wallets.txt + Dockerfile.pnl_produces в /app
+      - ./:/src
     depends_on:
       - redis
 
@@ -69,6 +67,12 @@ services:
     depends_on:
       - redis
       - selenium
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "1"
 
 volumes:
   redis-data:
