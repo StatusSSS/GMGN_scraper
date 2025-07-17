@@ -185,26 +185,36 @@ async def process_wallet(worker_id: int, wallet: str, *, token: str) -> None:
     logger.info("[{}] {}… PnL {:.3f}", token, wallet[:6], pnl_value)
     await save_snapshot_if_positive(wallet, pnl_value)
 
-async def worker_chunk(worker_id: int, wallets: List[str], *, token: str, total: int) -> None:
+async def worker_chunk(worker_id: int,
+                       wallets: List[str],
+                       *,
+                       token: str,
+                       total: int,
+                       processed: List[int]) -> None:
+    """Ворк-корутина: суммарный счётчик processed[0] показывает общий прогресс."""
     logger.info(
         "[worker {}] start token {} wallets={} proxy {}",
         worker_id, token, len(wallets), WORKER_PROXIES[worker_id]
     )
 
-    for idx, w in enumerate(wallets, 1):
+    for w in wallets:
         try:
             await process_wallet(worker_id, w, token=token)
         except Exception as e:
             logger.exception("[worker {}] unhandled on wallet {}: {}", worker_id, w, e)
 
-        # выводим прогресс не каждую итерацию, а через PROGRESS_EVERY элементов
-        if idx % PROGRESS_EVERY == 0 or idx == total:
-            logger.info("[{}] progress {}/{}", token, idx, total)
+        # ---------- общий счётчик ----------
+        processed[0] += 1
+        done = processed[0]
+        if done % PROGRESS_EVERY == 0 or done == total:
+            logger.info("[{}] progress {} / {}", token, done, total)
+        # -----------------------------------
 
         await asyncio.sleep(REQ_DELAY + random.uniform(0, 1))
 
-    logger.info("[worker {}] finished token {}", worker_id, token)
-# ───────────────────────── Batch handler ──────────────────────────────
+    logger.info("[worker {}] finished token {} ({} wallets)",
+                worker_id, token, len(wallets))
+
 
 async def handle_batch(wallets: List[str], proxies: List[str], *, token: str, src: str) -> None:
     global PROXY_POOL, WORKER_PROXIES
@@ -217,14 +227,17 @@ async def handle_batch(wallets: List[str], proxies: List[str], *, token: str, sr
         logger.warning("No proxies or wallets (token={})", token)
         return
 
+    # распределяем прокси
     initial = proxies[:n]
     PROXY_POOL = proxies[n:]
     WORKER_PROXIES = {i: initial[i] for i in range(n)}
 
+    processed = [0]  # общий mutable-счётчик для прогресса
+
     chunks = [wallets[i::n] for i in range(n)]
     tasks = [
         asyncio.create_task(
-            worker_chunk(i, chunks[i], token=token, total=total)
+            worker_chunk(i, chunks[i], token=token, total=total, processed=processed)
         )
         for i in range(n)
     ]
