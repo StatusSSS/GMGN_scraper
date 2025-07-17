@@ -27,6 +27,7 @@ from src.sdk.infrastructure.logger import logger
 from src.sdk.databases.postgres.dependency import with_db_session
 from src.sdk.databases.postgres.models import Wallet
 from src.sdk.queues.redis_connect import get_redis
+import redis.asyncio as aioredis
 
 load_dotenv()
 
@@ -249,32 +250,39 @@ async def handle_batch(wallets: List[str], proxies: List[str], *, token: str, sr
 # ───────────────────────── Main redis loop ────────────────────────────
 
 async def redis_loop(proxies: List[str]) -> None:
-    rds = get_redis()
-    logger.success("Worker started, queue '{}'", QUEUE_NAME)
+    """
+    Слушает Redis-очередь и передаёт пачки кошельков в handle_batch().
+    Благодаря async-клиенту event-loop больше не блокируется.
+    """
+    rds = get_redis()                                    # асинхронный клиент
+    logger.success("Worker started, queue '%s'", QUEUE_NAME)
 
     while True:
         try:
-            _, payload = rds.blpop(QUEUE_NAME, 0)
+            # ↓↓↓ БЫЛО  _, payload = rds.blpop(QUEUE_NAME, 0)
+            _key, payload = await rds.blpop(QUEUE_NAME)   # timeout=None ⇒ ждать вечно
+
             raw = json.loads(payload)
 
+            # --- распаковка сообщения ---
             if isinstance(raw, dict):
                 wallets = raw.get("wallets", [])
                 token   = raw.get("token", "unknown")
-                src     = raw.get("src", "unknown")
+                src     = raw.get("src",   "unknown")
             else:
                 wallets = raw
-                token   = "legacy"
-                src     = "legacy"
+                token = src = "legacy"
+            # -----------------------------
 
             if not isinstance(wallets, list):
-                logger.error("Malformed message: {}", raw)
+                logger.error("Malformed message: %s", raw)
                 continue
 
             await handle_batch(wallets, proxies, token=token, src=src)
-        except Exception as exc:
-            logger.exception("redis_loop error: {}", exc)
-            await asyncio.sleep(3)
 
+        except Exception as exc:
+            logger.exception("redis_loop error: %s", exc)
+            await asyncio.sleep(3)
 
 # ─────────────────────────── Entrypoint ───────────────────────────────
 
