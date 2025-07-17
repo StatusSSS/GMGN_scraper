@@ -39,6 +39,7 @@ MAX_RETRIES  = int(os.getenv("GMGN_RETRIES", "20"))
 MAX_WORKERS  = int(os.getenv("GMGN_WORKERS", "20"))
 SHOW_BODY    = int(os.getenv("GMGN_SHOW_BODY", "300"))
 
+PROGRESS_EVERY = int(os.getenv("PROGRESS_EVERY", "100"))
 # ──────────────────────────── Constants ───────────────────────────────
 HEADERS_BASE = {
     "accept": "application/json, text/plain, */*",
@@ -155,7 +156,6 @@ def fetch_wallet_stat(worker_id: int, wallet: str, token: str) -> Optional[dict]
                 proxies=proxies,
             )
             resp.raise_for_status()
-            logger.debug("[{}|{}] response via {} attempt {}", token, wallet[:6], proxy_str, attempt)
             return resp.json()
         except HTTPError as e:
             log_http_error(e, wallet, attempt, proxy_str)
@@ -186,16 +186,24 @@ async def process_wallet(worker_id: int, wallet: str, *, token: str) -> None:
     await save_snapshot_if_positive(wallet, pnl_value)
 
 async def worker_chunk(worker_id: int, wallets: List[str], *, token: str, total: int) -> None:
-    logger.info("[worker {}] start token {} wallets={} proxy {}", worker_id, token, len(wallets), WORKER_PROXIES[worker_id])
+    logger.info(
+        "[worker {}] start token {} wallets={} proxy {}",
+        worker_id, token, len(wallets), WORKER_PROXIES[worker_id]
+    )
+
     for idx, w in enumerate(wallets, 1):
         try:
             await process_wallet(worker_id, w, token=token)
         except Exception as e:
             logger.exception("[worker {}] unhandled on wallet {}: {}", worker_id, w, e)
-        logger.debug("[{}] progress {}/{}", token, idx, total)
-        await asyncio.sleep(REQ_DELAY + random.uniform(0, 1))
-    logger.info("[worker {}] finished token {}", worker_id, token)
 
+        # выводим прогресс не каждую итерацию, а через PROGRESS_EVERY элементов
+        if idx % PROGRESS_EVERY == 0 or idx == total:
+            logger.info("[{}] progress {}/{}", token, idx, total)
+
+        await asyncio.sleep(REQ_DELAY + random.uniform(0, 1))
+
+    logger.info("[worker {}] finished token {}", worker_id, token)
 # ───────────────────────── Batch handler ──────────────────────────────
 
 async def handle_batch(wallets: List[str], proxies: List[str], *, token: str, src: str) -> None:
