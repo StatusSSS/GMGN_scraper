@@ -22,7 +22,7 @@ from src.clickhouse_pnl.wallet_fetchers import (   # ✨ новые fetch-фун
     fetch_raydium_wallets,
     fetch_meteora_wallets,
 )
-from src.sdk.queues.redis_connect import get_redis
+from src.sdk.queues.redis_connect import get_redis_sync as get_redis
 
 load_dotenv()
 

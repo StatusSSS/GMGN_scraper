@@ -1,33 +1,36 @@
 # src/sdk/queues/redis_connect.py
 """
 Тонкая обёртка над redis-py (>=5.0) с LRU-кэшем.
-get_redis() возвращает один и тот же асинхронный клиент.
+ * get_redis()       → singleton асинхронного клиента (redis.asyncio.Redis)
+ * get_redis_sync()  → singleton синхронного   клиента (redis.Redis)
 """
 
-from functools import lru_cache
-import os
+from __future__ import annotations
 
-# redis ≥5 объединяет aioredis: импортируем подручный модуль
+import os
+from functools import lru_cache
+
+import redis                    # синхронный модуль
 import redis.asyncio as aioredis
 from dotenv import load_dotenv
 
-load_dotenv()  # читаем .env, если он есть
+load_dotenv()  # разрешает задавать параметры в .env
 
 
-def _build_async_client() -> aioredis.Redis:
+# ─────────────────────────── helpers ────────────────────────────
+def _redis_url() -> str | None:
     """
-    Создаёт экземпляр redis.asyncio.Redis согласно переменным окружения.
-    Приоритет:
-      1) REDIS_URL = redis://:pass@host:port/db
-      2) REDIS_HOST / REDIS_PORT / REDIS_DB / REDIS_PASSWORD (как раньше)
-    decode_responses=True → сразу получаем str, а не bytes.
+    Берём готовый REDIS_URL, если задан, иначе None.
     """
-    url = os.getenv("REDIS_URL")
-    if url:
-        # from_url автоматически парсит db, пароль, хост и порт
-        return aioredis.from_url(url, decode_responses=True)
+    return os.getenv("REDIS_URL")
 
-    return aioredis.Redis(
+
+def _env_kwargs() -> dict:
+    """
+    Формирует kwargs для redis.Redis / redis.asyncio.Redis
+    из переменных окружения (если REDIS_URL не задан).
+    """
+    return dict(
         host=os.getenv("REDIS_HOST", "localhost"),
         port=int(os.getenv("REDIS_PORT", 6379)),
         db=int(os.getenv("REDIS_DB", 0)),
@@ -36,7 +39,27 @@ def _build_async_client() -> aioredis.Redis:
     )
 
 
+# ─────────────────────── async singleton ───────────────────────
 @lru_cache(maxsize=1)
-def get_redis() -> aioredis.Redis:   # тип подсказан для IDE / mypy
-    """Singleton-клиент (асинхронный)."""
-    return _build_async_client()
+def get_redis() -> aioredis.Redis:
+    """
+    Singleton-клиент redis.asyncio.
+    Используйте в асинхронных функциях: rds = get_redis(); await rds.get("key")
+    """
+    url = _redis_url()
+    if url:
+        return aioredis.from_url(url, decode_responses=True)
+    return aioredis.Redis(**_env_kwargs())
+
+
+# ─────────────────────── sync singleton ────────────────────────
+@lru_cache(maxsize=1)
+def get_redis_sync() -> redis.Redis:
+    """
+    Singleton-клиент синхронного redis-py.
+    Используйте в обычных скриптах без asyncio.
+    """
+    url = _redis_url()
+    if url:
+        return redis.from_url(url, decode_responses=True)  # type: ignore[attr-defined]
+    return redis.Redis(**_env_kwargs())
