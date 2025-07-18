@@ -43,24 +43,44 @@ AVG_DELAY = float(os.getenv("AVG_DELAY", "3.0"))
 PROGRESS_EVERY = int(os.getenv("PROGRESS_EVERY", "100"))
 # ──────────────────────────── Constants ───────────────────────────────
 HEADERS_BASE = {
-    "accept": "application/json, text/plain, */*",
-    "accept-language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-    "user-agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
-    ),
+    'accept': 'application/json, text/plain, */*',
+    'accept-language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    'baggage': 'sentry-environment=production,sentry-release=20250718-1289-8c7e54b,sentry-public_key=93c25bab7246077dc3eb85b59d6e7d40,sentry-trace_id=4f22e16c017245a580fe4fc7539071d8,sentry-sample_rate=0.01,sentry-sampled=false',
+    'priority': 'u=1, i',
+    'referer': 'https://gmgn.ai/sol/address/43DbKtri_9NQn3TLma9sKd6pbBuXy5we6PMs6QLWAz8awhZyGNgmo',
+    'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+    'sec-ch-ua-arch': '"x86"',
+    'sec-ch-ua-bitness': '"64"',
+    'sec-ch-ua-full-version': '"138.0.7204.157"',
+    'sec-ch-ua-full-version-list': '"Not)A;Brand";v="8.0.0.0", "Chromium";v="138.0.7204.157", "Google Chrome";v="138.0.7204.157"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-model': '""',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-ch-ua-platform-version': '"15.0.0"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    'sentry-trace': 'eaa883c4174b43cf8a91b7c19f48a2f9-8ca244c0816a50e4-0',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
 }
 
 PARAMS_BASE = {
-    "device_id": "c45e37f7-53ff-4d68-813b-fd0f7b736979",
-    "client_id": "gmgn_web_20250617-62-c04b007",
-    "from_app":  "gmgn",
-    "app_ver":   "20250617-62-c04b007",
-    "tz_name":   "Europe/Moscow",
-    "tz_offset": "10800",
-    "app_lang":  "ru",
-    "fp_did":    "77abb27885cffbec63c7f9fbd35b4116",
-    "os":        "web",
+    'device_id': 'c45e37f7-53ff-4d68-813b-fd0f7b736979',
+    'client_id': 'gmgn_web_20250718-1289-8c7e54b',
+    'from_app': 'gmgn',
+    'app_ver': '20250718-1289-8c7e54b',
+    'tz_name': 'Europe/Moscow',
+    'tz_offset': '10800',
+    'app_lang': 'ru',
+    'fp_did': '77abb27885cffbec63c7f9fbd35b4116',
+    'os': 'web',
+    'limit': '50',
+    'orderby': 'last_active_timestamp',
+    'direction': 'desc',
+    'showsmall': 'true',
+    'sellout': 'true',
+    'hide_airdrop': 'false',
+    'tx30d': 'true',
 }
 
 # ───────────────────────── Proxy rotation ─────────────────────────────
