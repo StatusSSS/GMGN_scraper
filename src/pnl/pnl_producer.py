@@ -48,6 +48,7 @@ WALLETS_QUEUE       = os.getenv("WALLETS_QUEUE", "wallet_queue")
 RESET_WALLETS_QUEUE = os.getenv("RESET_WALLETS_QUEUE", "1") == "1"
 DELAY_SEC           = int(os.getenv("DELAY_SEC", "0"))
 OUT_DIR             = os.getenv("OUT_DIR", "reports")
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "100"))
 
 # соответствие «флаг источника → функция-fetcher»
 FETCHERS: Dict[str, Callable[[str], List[Dict]]] = {
@@ -57,18 +58,14 @@ FETCHERS: Dict[str, Callable[[str], List[Dict]]] = {
 }
 
 # ───────────────────────────── Helpers ─────────────────────────────
-def push_wallets_to_redis(
-    wallets: List[str],
-    *,
-    token: str,
-    src_flag: str,
-    queue: str = WALLETS_QUEUE,
-) -> None:
-    """Кладёт результат одним JSON-объектом в Redis-лист `queue`."""
-    if not wallets:
-        return
-    payload = {"src": src_flag, "token": token, "wallets": wallets}
-    get_redis().rpush(queue, json.dumps(payload))
+def push_wallets_to_redis(wallets: list[str], *, token: str, src_flag: str) -> None:
+    rds = get_redis()
+    for i in range(0, len(wallets), CHUNK_SIZE):
+        chunk = wallets[i : i + CHUNK_SIZE]
+        if not chunk:
+            continue
+        payload = {"src": src_flag, "token": token, "wallets": chunk}
+        rds.rpush(WALLETS_QUEUE, json.dumps(payload))
 
 # ─────────────────────────── Consumer loop ─────────────────────────
 def consume_tokens() -> None:
