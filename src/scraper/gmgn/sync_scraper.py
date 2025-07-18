@@ -39,7 +39,7 @@ REQ_DELAY    = float(os.getenv("GMGN_DELAY", "2"))
 MAX_RETRIES  = int(os.getenv("GMGN_RETRIES", "20"))
 MAX_WORKERS  = int(os.getenv("GMGN_WORKERS", "20"))
 SHOW_BODY    = int(os.getenv("GMGN_SHOW_BODY", "300"))
-
+AVG_DELAY = float(os.getenv("AVG_DELAY", "3.0"))
 PROGRESS_EVERY = int(os.getenv("PROGRESS_EVERY", "100"))
 # ──────────────────────────── Constants ───────────────────────────────
 HEADERS_BASE = {
@@ -70,7 +70,13 @@ WORKER_PROXIES: Dict[int, str] = {}
 
 FAIL_WALLETS_FILE = "fail_wallets.txt"
 
-# ──────────────────────────── Utilities ───────────────────────────────
+async def human_pause():
+    # экспоненциальная задержка
+    delay = random.expovariate(1 / AVG_DELAY)
+    # каждые 50 запросов – большой кофе-брейк
+    if random.random() < 0.02:
+        delay += random.uniform(30, 90)
+    await asyncio.sleep(delay)
 
 def load_lines(path: str) -> List[str]:
     try:
@@ -211,7 +217,7 @@ async def worker_chunk(worker_id: int,
             logger.info("[{}] progress {} / {}", token, done, total)
         # -----------------------------------
 
-        await asyncio.sleep(REQ_DELAY + random.uniform(0, 1))
+        await human_pause()
 
     logger.info("[worker {}] finished token {} ({} wallets)",
                 worker_id, token, len(wallets))
