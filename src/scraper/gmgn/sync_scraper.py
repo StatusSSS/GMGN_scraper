@@ -112,31 +112,34 @@ class HeaderFactory:
     def __init__(self, rnd: Optional[random.Random] = None) -> None:
         self.rnd = rnd or _def_rng
 
-    # Public -----------------------------------------------------------------
     def headers(self, addr: str) -> Dict[str, str]:
         brand, ua_tpl = self.rnd.choice(_BROWSERS)
         major = self.rnd.randint(133, 140)
         ua = ua_tpl.format(major=major)
+
         platform, platform_ver, arch, bits = self.rnd.choice(_PLATFORMS)
 
+        # полная версия типа 137.0.7151.104
         full_ver = f"{major}.0.{self.rnd.randint(4000, 8000)}.{self.rnd.randint(50, 200)}"
-        full_list = (
-            f'"{brand}";v="{full_ver}", '
-            f'"Chromium";v="{full_ver}", '
-            f'"Not/A)Brand";v="24.0.0.0"'
-        )
-        sec_ch = (
-            f'"{brand}";v="{major}", '
-            f'"Chromium";v="{major}", '
-            f'"Not/A)Brand";v="24"'
-        )
+
+        # **строки**, а не случайные кортежи
+        full_list = ", ".join([
+            f'"{brand}";v="{full_ver}"',
+            f'"Chromium";v="{full_ver}"',
+            '"Not/A)Brand";v="24.0.0.0"',
+        ])
+        sec_ch = ", ".join([
+            f'"{brand}";v="{major}"',
+            f'"Chromium";v="{major}"',
+            '"Not/A)Brand";v="24"',
+        ])
 
         return {
-            # base
             "Accept": "application/json, text/plain, */*",
             "accept-language": f"ru-RU,ru;q=0.9,{self.rnd.choice(_LANGS)}-US;q=0.8,en;q=0.7",
             "User-Agent": ua,
-            # UA-CH
+
+            # UA-Client-Hints
             "sec-ch-ua-full-version-list": full_list,
             "sec-ch-ua-full-version": f'"{full_ver}"',
             "sec-ch-ua": sec_ch,
@@ -146,15 +149,17 @@ class HeaderFactory:
             "sec-ch-ua-bitness": f'"{bits}"',
             "sec-ch-ua-model": '""',
             "sec-ch-ua-mobile": "?0",
+
             # Sentry / baggage
             "baggage": (
-                "sentry-environment=production,"  # static on site
+                "sentry-environment=production,"
                 f"sentry-release={_build_stamp()},"
                 "sentry-public_key=93c25bab7246077dc3eb85b59d6e7d40,"
                 f"sentry-trace_id={_uid()},"
-                "sentry-sample_rate=0.005,sentry-sampled=false",
+                "sentry-sample_rate=0.005,sentry-sampled=false"
             ),
             "sentry-trace": f"{_uid()}-{_uid()[:16]}-0",
+
             # Referer
             "Referer": f"https://gmgn.ai/sol/address/{addr}",
         }
@@ -284,8 +289,6 @@ def fetch_wallet_stat(worker_id: int, wallet: str, factory: HeaderFactory) -> Op
     for attempt in range(1, MAX_RETRIES + 1):
         hdrs = factory.headers(wallet)
         prms = factory.params()
-        print(hdrs)
-        print(prms)
         try:
             resp = curl.get(
                 url=url,
