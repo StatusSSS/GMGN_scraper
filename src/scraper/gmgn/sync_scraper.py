@@ -63,8 +63,8 @@ PARAMS_BASE = {
     "os":        "web",
 }
 
-# ───────────────────────── Proxy rotation ─────────────────────────────
-PROXY_POOL: List[str] = []        # свободные прокси (round‑robin)
+
+PROXY_POOL: List[str] = []
 PROXY_LOCK = threading.Lock()
 WORKER_PROXIES: Dict[int, str] = {}
 

@@ -1,12 +1,3 @@
-"""
-src/pnl/pnl_producer.py
-
-Консюмер трёх очередей (PumpSwap / Raydium / Meteora):
-— ждёт токен в Redis
-— выбирает нужный ClickHouse-fetcher по источнику
-— кладёт список найденных кошельков в wallet_queue
-"""
-
 from __future__ import annotations
 
 import json
@@ -17,7 +8,7 @@ from typing import Dict, List, Callable
 
 from dotenv import load_dotenv
 
-from src.clickhouse_pnl.wallet_fetchers import (   # ✨ новые fetch-функции
+from src.clickhouse_pnl.wallet_fetchers import (
     fetch_pumpswap_pnl,
     fetch_raydium_wallets,
     fetch_meteora_wallets,
@@ -26,7 +17,8 @@ from src.sdk.queues.redis_connect import get_redis_sync as get_redis
 
 load_dotenv()
 
-# ───────────────────────────── Config ──────────────────────────────
+
+
 TOKEN_QUEUES_ENV = os.getenv(
     "TOKEN_QUEUES",
     "pump_queue,raydium_queue,meteora_queue",
@@ -49,15 +41,19 @@ RESET_WALLETS_QUEUE = os.getenv("RESET_WALLETS_QUEUE", "1") == "1"
 DELAY_SEC           = int(os.getenv("DELAY_SEC", "0"))
 OUT_DIR             = os.getenv("OUT_DIR", "reports")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "100"))
+BLPOP_TIMEOUT = int(os.getenv("BLPOP_TIMEOUT", "30"))
 
-# соответствие «флаг источника → функция-fetcher»
+
+
+
 FETCHERS: Dict[str, Callable[[str], List[Dict]]] = {
     "PumpSwap": fetch_pumpswap_pnl,
     "Raydium":  fetch_raydium_wallets,
     "Meteora":  fetch_meteora_wallets,
 }
 
-# ───────────────────────────── Helpers ─────────────────────────────
+
+
 def push_wallets_to_redis(wallets: list[str], *, token: str, src_flag: str) -> None:
     rds = get_redis()
     for i in range(0, len(wallets), CHUNK_SIZE):
@@ -67,9 +63,9 @@ def push_wallets_to_redis(wallets: list[str], *, token: str, src_flag: str) -> N
         payload = {"src": src_flag, "token": token, "wallets": chunk}
         rds.rpush(WALLETS_QUEUE, json.dumps(payload))
 
-# ─────────────────────────── Consumer loop ─────────────────────────
-def consume_tokens() -> None:
-    """Слушает TOKEN_QUEUES, обрабатывает токены и пушит кошельки в WALLETS_QUEUE."""
+
+def consume_tokens_once() -> None:
+    """Очищает очереди (опц.) и обрабатывает все токены, затем завершает процесс."""
     rds = get_redis()
 
     if RESET_WALLETS_QUEUE:
@@ -82,19 +78,15 @@ def consume_tokens() -> None:
 
     processed = 0
     while True:
-        # blpop(block) → (queue_name, value)
-        queue_name_raw, raw_token = rds.blpop(TOKEN_QUEUES)
-        queue_name = (
-            queue_name_raw.decode()
-            if isinstance(queue_name_raw, (bytes, bytearray))
-            else str(queue_name_raw)
-        )
-        token = (
-            raw_token.decode()
-            if isinstance(raw_token, (bytes, bytearray))
-            else str(raw_token)
-        )
-        src_flag = QUEUE_FLAGS.get(queue_name, queue_name)
+        popped = rds.blpop(TOKEN_QUEUES, timeout=BLPOP_TIMEOUT)
+        if popped is None:
+            print(f"⌛ Нет новых токенов {BLPOP_TIMEOUT} с — выходим")
+            break
+
+        queue_name_raw, raw_token = popped
+        queue_name = queue_name_raw.decode() if isinstance(queue_name_raw, (bytes, bytearray)) else str(queue_name_raw)
+        token       = raw_token.decode()        if isinstance(raw_token,  (bytes, bytearray)) else str(raw_token)
+        src_flag    = QUEUE_FLAGS.get(queue_name, queue_name)
 
         processed += 1
         print(f"🛠️  [{processed}] {src_flag}: обрабатываем токен {token}")
@@ -112,16 +104,14 @@ def consume_tokens() -> None:
 
         wallets = [row["signing_wallet"] for row in rows]
         push_wallets_to_redis(wallets, token=token, src_flag=src_flag)
-        print(
-            f"📬  {src_flag} token={token} → {len(wallets)} кошельков отправлено в {WALLETS_QUEUE}"
-        )
+        print(f"📬  {src_flag} token={token} → {len(wallets)} кошельков отправлено в {WALLETS_QUEUE}")
 
         if DELAY_SEC:
             time.sleep(DELAY_SEC)
 
-# ─────────────────────────── Entrypoint ────────────────────────────
+
 if __name__ == "__main__":
     try:
-        consume_tokens()
+        consume_tokens_once()
     except KeyboardInterrupt:
         print("Остановлено по Ctrl-C")
