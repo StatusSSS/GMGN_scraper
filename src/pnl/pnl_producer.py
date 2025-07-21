@@ -37,7 +37,7 @@ QUEUE_FLAGS: Dict[str, str] = {
 }
 
 WALLETS_QUEUE       = os.getenv("WALLETS_QUEUE", "wallet_queue")
-RESET_WALLETS_QUEUE = os.getenv("RESET_WALLETS_QUEUE", "0") == "0"
+RESET_WALLETS_QUEUE = False
 DELAY_SEC           = int(os.getenv("DELAY_SEC", "0"))
 OUT_DIR             = os.getenv("OUT_DIR", "reports")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
