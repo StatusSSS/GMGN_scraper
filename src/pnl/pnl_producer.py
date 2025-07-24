@@ -17,38 +17,37 @@ from src.sdk.queues.redis_connect import get_redis_sync as get_redis
 
 load_dotenv()
 
-# ──────────────────────────── ENV ─────────────────────────────────────
-TOKEN_QUEUES_ENV = os.getenv("TOKEN_QUEUES", "pump_queue,raydium_queue,meteora_queue")
-TOKEN_QUEUES: List[str] = [q.strip() for q in TOKEN_QUEUES_ENV.split(",") if q.strip()]
-
-QUEUE_FLAGS_ENV = os.getenv(
-    "QUEUE_FLAGS",
-    "pump_queue=PumpSwap,raydium_queue=Raydium,meteora_queue=Meteora",
-)
+# ─────────────────────────── ENV ─────────────────────────────────────
+TOKEN_QUEUES: List[str] = [
+    q.strip() for q in os.getenv("TOKEN_QUEUES", "pump_queue,raydium_queue,meteora_queue").split(",") if q.strip()
+]
 QUEUE_FLAGS: Dict[str, str] = {
     k.strip(): v.strip()
     for k, v in (
-        pair.split("=", 1) for pair in QUEUE_FLAGS_ENV.split(",") if "=" in pair
+        pair.split("=", 1)
+        for pair in os.getenv(
+            "QUEUE_FLAGS",
+            "pump_queue=PumpSwap,raydium_queue=Raydium,meteora_queue=Meteora",
+        ).split(",")
+        if "=" in pair
     )
 }
 
-WALLETS_QUEUE = os.getenv("WALLETS_QUEUE", "wallet_queue")
-# Очистка выполняется только один раз: устанавливаем флаг-маркер в Redis
-RESET_WALLETS_QUEUE = os.getenv("RESET_WALLETS_QUEUE", "false").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-CLEAR_MARKER_KEY = os.getenv("CLEAR_MARKER_KEY", "wallet_queue_cleared")
+WALLETS_QUEUE       = os.getenv("WALLETS_QUEUE", "wallet_queue")
+RESET_WALLETS_QUEUE = os.getenv("RESET_WALLETS_QUEUE", "false").lower() in {"1", "true", "yes"}
+CLEAR_MARKER_KEY    = os.getenv("CLEAR_MARKER_KEY", "wallet_queue_cleared")
 
-DELAY_SEC = int(os.getenv("DELAY_SEC", "0"))
-OUT_DIR = os.getenv("OUT_DIR", "reports")
 BLPOP_TIMEOUT = int(os.getenv("BLPOP_TIMEOUT", "300"))
+DELAY_SEC     = int(os.getenv("DELAY_SEC", "0"))
+OUT_DIR       = os.getenv("OUT_DIR", "reports")
+
+# ▸ размер одной пачки, отправляемой в Redis
+BATCH_SIZE    = int(os.getenv("WALLET_BATCH", "20000"))
 
 FETCHERS: Dict[str, Callable[[str], List[Dict]]] = {
     "PumpSwap": fetch_pumpswap_pnl,
-    "Raydium": fetch_raydium_wallets,
-    "Meteora": fetch_meteora_wallets,
+    "Raydium":  fetch_raydium_wallets,
+    "Meteora":  fetch_meteora_wallets,
 }
 
 # ───────────────────────── helpers ────────────────────────────────────
@@ -56,82 +55,77 @@ def clear_queues_once(rds) -> None:
     """Удаляет очереди только один раз, отмечая это маркером в Redis."""
     if not RESET_WALLETS_QUEUE:
         return
-
-    # setnx атомарно создаёт ключ, если его ещё нет
     if rds.setnx(CLEAR_MARKER_KEY, int(time.time())):
-        rds.delete(WALLETS_QUEUE)
-        for q in TOKEN_QUEUES:
-            rds.delete(q)
+        rds.delete(WALLETS_QUEUE, *TOKEN_QUEUES)
         print(f"🧹  Очистили {WALLETS_QUEUE} и все queues из TOKEN_QUEUES")
     else:
         print("🔸 Очереди уже были очищены ранее — пропускаем очистку")
 
 
 def push_wallets_to_redis(wallets: list[str], *, token: str, src_flag: str) -> None:
-    """
-    Кладёт ВЕСЬ список кошельков токена одной записью в Redis.
-
-    Это позволяет воркерам обрабатывать всю партию целиком,
-    а не кусками по CHUNK_SIZE.
-    """
+    """Кладёт ВСЮ пачку кошельков одной записью в `WALLETS_QUEUE`."""
     if not wallets:
         return
-    rds = get_redis()
     payload = {"src": src_flag, "token": token, "wallets": wallets}
-    rds.rpush(WALLETS_QUEUE, json.dumps(payload))
+    get_redis().rpush(WALLETS_QUEUE, json.dumps(payload))
 
-# ─────────────────────── основной цикл ───────────────────────────────
+# ─────────────────────── основной процесс ────────────────────────────
 def consume_tokens_once() -> None:
-    """Обрабатывает все токены единоразово, затем завершает процесс."""
+    """
+    1. Забираем ВСЕ токены из очередей TOKEN_QUEUES.
+    2. Для каждого токена получаем список кошельков.
+    3. Отправляем кошельки в Redis батчами по BATCH_SIZE.
+    """
     rds = get_redis()
     clear_queues_once(rds)
-
     Path(OUT_DIR).mkdir(parents=True, exist_ok=True)
 
+    buffer: list[str] = []
     processed = 0
+
     while True:
         popped = rds.blpop(TOKEN_QUEUES, timeout=BLPOP_TIMEOUT)
         if popped is None:
-            print(f"⌛ Нет новых токенов {BLPOP_TIMEOUT} с — завершаем работу")
-            break  # прекращаем цикл и выходим
+            print(f"⌛ Нет новых токенов {BLPOP_TIMEOUT} с — завершаем сбор токенов")
+            break  # очереди опустели
 
-        queue_name_raw, raw_token = popped
-        queue_name = (
-            queue_name_raw.decode()
-            if isinstance(queue_name_raw, (bytes, bytearray))
-            else str(queue_name_raw)
-        )
-        token = (
-            raw_token.decode()
-            if isinstance(raw_token, (bytes, bytearray))
-            else str(raw_token)
-        )
-        src_flag = QUEUE_FLAGS.get(queue_name, queue_name)
-
-        processed += 1
-        print(f"🛠️  [{processed}] {src_flag}: обрабатываем токен {token}")
+        queue_raw, token_raw = popped
+        queue_name = queue_raw.decode()  if isinstance(queue_raw,  (bytes, bytearray)) else str(queue_raw)
+        token      = token_raw.decode()  if isinstance(token_raw,  (bytes, bytearray)) else str(token_raw)
+        src_flag   = QUEUE_FLAGS.get(queue_name, queue_name)
 
         fetcher = FETCHERS.get(src_flag)
         if fetcher is None:
             print(f"⚠️  Неизвестный src_flag={src_flag} — пропускаем токен {token}")
             continue
 
+        processed += 1
+        print(f"🛠️  [{processed}] {src_flag}: обрабатываем {token}")
+
         try:
             rows = fetcher(token)
         except Exception as e:
-            print(f"⚠️  Ошибка при обработке токена {token} ({src_flag}): {e}")
+            print(f"⚠️  Ошибка при обработке токена {token}: {e}")
             continue
 
-        wallets = [row["signing_wallet"] for row in rows]
-        push_wallets_to_redis(wallets, token=token, src_flag=src_flag)
-        print(
-            f"📬  {src_flag} token={token} → {len(wallets)} кошельков отправлено в {WALLETS_QUEUE}"
-        )
+        # ➜ добавляем в общий буфер
+        buffer.extend(row["signing_wallet"] for row in rows)
+
+        # ➜ по достижении порога — отправляем пачку
+        if len(buffer) >= BATCH_SIZE:
+            push_wallets_to_redis(buffer, token="batch", src_flag="mix")
+            print(f"📤  Отправили {len(buffer)} кошельков в {WALLETS_QUEUE}")
+            buffer.clear()
 
         if DELAY_SEC:
             time.sleep(DELAY_SEC)
 
-    print("🏁 Работа завершена. До новых встреч!")
+    # финальный хвост
+    if buffer:
+        push_wallets_to_redis(buffer, token="batch", src_flag="mix")
+        print(f"📤  Финальный флаш {len(buffer)} кошельков в {WALLETS_QUEUE}")
+
+    print(f"🏁 Готово: обработано {processed} токенов, батч {BATCH_SIZE}, очередь «{WALLETS_QUEUE}»")
 
 
 if __name__ == "__main__":
