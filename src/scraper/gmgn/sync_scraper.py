@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -7,9 +6,7 @@ import os
 import random
 import threading
 import time
-import uuid
-from collections import defaultdict
-from typing import DefaultDict, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import redis.asyncio as aioredis
 from curl_cffi import requests as curl
@@ -25,7 +22,7 @@ from src.sdk.queues.redis_connect import get_redis
 
 # ─── gmgn helpers ─────────────────────────────────────────────────────
 from src.scraper.gmgn import fingerprints as fp
-from src.scraper.gmgn.proxy_manager import ProxyManager  # ← новый модуль
+from src.scraper.gmgn.proxy_manager import ProxyManager
 
 load_dotenv()
 
@@ -38,17 +35,16 @@ MAX_WORKERS = int(os.getenv("GMGN_WORKERS", "20"))
 SHOW_BODY = int(os.getenv("GMGN_SHOW_BODY", "300"))
 AVG_DELAY = float(os.getenv("AVG_DELAY", "3.0"))
 PROGRESS_EVERY = int(os.getenv("PROGRESS_EVERY", "100"))
-COOL_DOWN_SEC = int(os.getenv("PROXY_COOLDOWN", "7200"))
-ERR_THRESHOLD = int(os.getenv("PROXY_ERR_THRESHOLD", "10"))
-MAX_IP_LIFETIME = int(os.getenv("PROXY_MAX_LIFETIME", "3600"))
+
+# ─────────────────────────── Proxy timing ────────────────────────────
+HOT_LIFETIME_SEC = 10 * 60           # 10‑minute working window
+COOL_DOWN_SEC    = 50 * 60           # 50‑minute cool‑down window
 
 # ───────────────────────── Proxy globals ──────────────────────────────
-PM: ProxyManager  # инициализируется в main()
+PM: ProxyManager  # set in main()
 WORKER_PROXIES: Dict[int, str] = {}
-ERROR_STREAK: DefaultDict[str, int] = defaultdict(int)
-FIRST_USE_TS: Dict[str, float] = {}
 
-# счётчик запросов на каждый IP для триггера ротации fingerprint’а
+# request counter for fingerprint rotation
 PROXY_COUNTERS: Dict[str, int] = {}
 PROXY_COUNTERS_LOCK = threading.Lock()
 
@@ -57,14 +53,14 @@ FAIL_WALLETS_FILE = "fail_wallets.txt"
 # ────────────────────────── helpers ───────────────────────────────────
 
 def human_pause() -> float:
-    """Экспоненциальная задержка + редкие длинные паузы."""
+    """Exponential delay with rare long pauses."""
     delay = random.expovariate(1 / AVG_DELAY)
     if random.random() < 0.02:
         delay += random.uniform(30, 90)
     return delay
 
 
-async def async_sleep_random():  # non‑blocking sleep
+async def async_sleep_random():
     await asyncio.sleep(human_pause())
 
 
@@ -107,20 +103,17 @@ def mark_failed_wallet(wallet: str) -> None:
 # ───────────────────────── Proxy rotation ────────────────────────────
 
 def rotate_proxy(worker_id: int) -> None:
-    """Снять IP с воркера, отправить его на охлаждение и выдать новый."""
+    """Replace the worker's proxy after HOT_LIFETIME_SEC has passed."""
     current = WORKER_PROXIES[worker_id]
-    PM.release(current)  # → cooldown
+    PM.release(current)                 # send to cool‑down queue
 
-    new_proxy = PM.acquire()  # ← ready / recycled
+    new_proxy = PM.acquire()            # get the oldest cooled‑down proxy
     WORKER_PROXIES[worker_id] = new_proxy
 
-    # сбрасываем счётчики для нового IP
-    ERROR_STREAK[new_proxy] = 0
-    FIRST_USE_TS[new_proxy] = time.time()
+    # reset request counter for new ip
+    PROXY_COUNTERS[new_proxy] = 0
 
-    logger.info(
-        "[worker {}] proxy switch: {} → {}", worker_id, current, new_proxy
-    )
+    logger.info("[worker {}] proxy rotated: {} → {}", worker_id, current, new_proxy)
 
 
 # ───────────────────────── DB save ────────────────────────────────────
@@ -135,7 +128,7 @@ async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session
     try:
         await db_session.flush()
         logger.success("Snapshot saved for {} (PnL {:.3f})", wallet, pnl_value)
-    except IntegrityError:  # duplicate
+    except IntegrityError:
         await db_session.rollback()
 
 
@@ -150,7 +143,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     url = f"https://gmgn.ai/api/v1/wallet_stat/sol/{wallet}/{API_PERIOD}"
 
     for attempt in range(1, MAX_RETRIES + 1):
-        # ≡ выбор fingerprint для текущего IP ≡
+        # fingerprint selection
         with PROXY_COUNTERS_LOCK:
             cnt = PROXY_COUNTERS[proxy_str]
             PROXY_COUNTERS[proxy_str] += 1
@@ -167,8 +160,6 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
                 proxies=proxies,
             )
             resp.raise_for_status()
-            # success -------------------------------------------
-            ERROR_STREAK[proxy_str] = 0
             return resp.json()
 
         except HTTPError as e:
@@ -184,28 +175,12 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
                 e,
             )
 
-        # ошибка: инкремент счётчика
-        ERROR_STREAK[proxy_str] += 1
         time.sleep(1.5)
-
-        too_many = ERROR_STREAK[proxy_str] >= ERR_THRESHOLD
-        too_long = time.time() - FIRST_USE_TS.get(proxy_str, 0) >= MAX_IP_LIFETIME
-        if too_many or too_long:
-            logger.warning(
-                "[worker {}] proxy {} overheated (errors={}, lived={} s)",
-                worker_id,
-                proxy_str,
-                ERROR_STREAK[proxy_str],
-                int(time.time() - FIRST_USE_TS.get(proxy_str, 0)),
-            )
-            rotate_proxy(worker_id)
-            return None
 
     return None
 
 
-
-
+# ───────────────────────── worker helpers ────────────────────────────
 
 async def process_wallet(worker_id: int, wallet: str) -> None:
     loop = asyncio.get_running_loop()
@@ -228,7 +203,6 @@ async def process_wallet(worker_id: int, wallet: str) -> None:
 
 # ───────────────────────── worker coroutine ───────────────────────────
 
-
 async def worker_chunk(
     worker_id: int,
     wallets: List[str],
@@ -246,7 +220,14 @@ async def worker_chunk(
         WORKER_PROXIES[worker_id],
     )
 
+    last_switch = time.time()
+
     for w in wallets:
+        # time‑based proxy rotation every HOT_LIFETIME_SEC
+        if time.time() - last_switch >= HOT_LIFETIME_SEC:
+            rotate_proxy(worker_id)
+            last_switch = time.time()
+
         try:
             await process_wallet(worker_id, w)
         except Exception as e:
@@ -269,12 +250,11 @@ async def worker_chunk(
 
 # ────────────────────────── batch handler ─────────────────────────────
 
-
 async def handle_batch(wallets: List[str], *, token: str, src: str):
     total = len(wallets)
     logger.success("➡️  batch start token={} src={} wallets={}", token, src, total)
 
-    # инициализируем fingerprints при первом запуске
+    # initialize fingerprints once
     if not fp.PROXY_IDENTITIES:
         fp.init_proxies(PM.ready)
         for p in PM.ready:
@@ -285,11 +265,10 @@ async def handle_batch(wallets: List[str], *, token: str, src: str):
         logger.warning("No proxies or wallets (token={})", token)
         return
 
-    # выдаём воркерам IP из ProxyManager’а
+    # assign proxies to workers
     initial = [PM.acquire() for _ in range(n)]
     for proxy in initial:
-        FIRST_USE_TS[proxy] = time.time()
-        ERROR_STREAK[proxy] = 0
+        PROXY_COUNTERS[proxy] = 0
 
     global WORKER_PROXIES
     WORKER_PROXIES = {i: initial[i] for i in range(n)}
@@ -308,14 +287,13 @@ async def handle_batch(wallets: List[str], *, token: str, src: str):
 
 # ───────────────────────── Redis loop ─────────────────────────────────
 
-
 async def redis_loop() -> None:
     rds: aioredis.Redis = get_redis()
     logger.success("Worker started, queue '%s'", QUEUE_NAME)
 
     while True:
         try:
-            _key, payload = await rds.blpop(QUEUE_NAME)  # block
+            _key, payload = await rds.blpop(QUEUE_NAME)
             raw = json.loads(payload)
 
             if isinstance(raw, dict):
@@ -338,7 +316,6 @@ async def redis_loop() -> None:
 
 
 # ─────────────────────────── Entrypoint ───────────────────────────────
-
 
 def main() -> None:
     global PM
