@@ -17,10 +17,8 @@ from src.sdk.queues.redis_connect import get_redis_sync as get_redis
 
 load_dotenv()
 
-TOKEN_QUEUES_ENV = os.getenv(
-    "TOKEN_QUEUES",
-    "pump_queue,raydium_queue,meteora_queue",
-)
+# ──────────────────────────── ENV ─────────────────────────────────────
+TOKEN_QUEUES_ENV = os.getenv("TOKEN_QUEUES", "pump_queue,raydium_queue,meteora_queue")
 TOKEN_QUEUES: List[str] = [q.strip() for q in TOKEN_QUEUES_ENV.split(",") if q.strip()]
 
 QUEUE_FLAGS_ENV = os.getenv(
@@ -35,13 +33,16 @@ QUEUE_FLAGS: Dict[str, str] = {
 }
 
 WALLETS_QUEUE = os.getenv("WALLETS_QUEUE", "wallet_queue")
-# Очистка выполняется только один раз: устанавливаем флаг‑маркер в Redis
-RESET_WALLETS_QUEUE = os.getenv("RESET_WALLETS_QUEUE", "false").lower() in {"1", "true", "yes"}
+# Очистка выполняется только один раз: устанавливаем флаг-маркер в Redis
+RESET_WALLETS_QUEUE = os.getenv("RESET_WALLETS_QUEUE", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 CLEAR_MARKER_KEY = os.getenv("CLEAR_MARKER_KEY", "wallet_queue_cleared")
 
 DELAY_SEC = int(os.getenv("DELAY_SEC", "0"))
 OUT_DIR = os.getenv("OUT_DIR", "reports")
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
 BLPOP_TIMEOUT = int(os.getenv("BLPOP_TIMEOUT", "300"))
 
 FETCHERS: Dict[str, Callable[[str], List[Dict]]] = {
@@ -50,7 +51,7 @@ FETCHERS: Dict[str, Callable[[str], List[Dict]]] = {
     "Meteora": fetch_meteora_wallets,
 }
 
-
+# ───────────────────────── helpers ────────────────────────────────────
 def clear_queues_once(rds) -> None:
     """Удаляет очереди только один раз, отмечая это маркером в Redis."""
     if not RESET_WALLETS_QUEUE:
@@ -67,18 +68,21 @@ def clear_queues_once(rds) -> None:
 
 
 def push_wallets_to_redis(wallets: list[str], *, token: str, src_flag: str) -> None:
+    """
+    Кладёт ВЕСЬ список кошельков токена одной записью в Redis.
+
+    Это позволяет воркерам обрабатывать всю партию целиком,
+    а не кусками по CHUNK_SIZE.
+    """
+    if not wallets:
+        return
     rds = get_redis()
-    for i in range(0, len(wallets), CHUNK_SIZE):
-        chunk = wallets[i : i + CHUNK_SIZE]
-        if not chunk:
-            continue
-        payload = {"src": src_flag, "token": token, "wallets": chunk}
-        rds.rpush(WALLETS_QUEUE, json.dumps(payload))
+    payload = {"src": src_flag, "token": token, "wallets": wallets}
+    rds.rpush(WALLETS_QUEUE, json.dumps(payload))
 
-
+# ─────────────────────── основной цикл ───────────────────────────────
 def consume_tokens_once() -> None:
     """Обрабатывает все токены единоразово, затем завершает процесс."""
-
     rds = get_redis()
     clear_queues_once(rds)
 
@@ -93,10 +97,14 @@ def consume_tokens_once() -> None:
 
         queue_name_raw, raw_token = popped
         queue_name = (
-            queue_name_raw.decode() if isinstance(queue_name_raw, (bytes, bytearray)) else str(queue_name_raw)
+            queue_name_raw.decode()
+            if isinstance(queue_name_raw, (bytes, bytearray))
+            else str(queue_name_raw)
         )
         token = (
-            raw_token.decode() if isinstance(raw_token, (bytes, bytearray)) else str(raw_token)
+            raw_token.decode()
+            if isinstance(raw_token, (bytes, bytearray))
+            else str(raw_token)
         )
         src_flag = QUEUE_FLAGS.get(queue_name, queue_name)
 
@@ -130,4 +138,4 @@ if __name__ == "__main__":
     try:
         consume_tokens_once()
     except KeyboardInterrupt:
-        print("Остановлено по Ctrl‑C")
+        print("Остановлено по Ctrl-C")
