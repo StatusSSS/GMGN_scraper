@@ -37,8 +37,9 @@ AVG_DELAY = float(os.getenv("AVG_DELAY", "3.0"))
 PROGRESS_EVERY = int(os.getenv("PROGRESS_EVERY", "100"))
 
 # ─────────────────────────── Proxy timing ────────────────────────────
-HOT_LIFETIME_SEC = 10 * 60           # 10‑minute working window
-COOL_DOWN_SEC    = 50 * 60           # 50‑minute cool‑down window
+HOT_LIFETIME_SEC   = 8 * 60            # 8-minute working window
+ROTATION_PAUSE_SEC = 2 * 60            # 2-minute pause after switch
+COOL_DOWN_SEC      = 50 * 60           # 50-minute cool-down window (ProxyManager)
 
 # ───────────────────────── Proxy globals ──────────────────────────────
 PM: ProxyManager  # set in main()
@@ -103,11 +104,11 @@ def mark_failed_wallet(wallet: str) -> None:
 # ───────────────────────── Proxy rotation ────────────────────────────
 
 def rotate_proxy(worker_id: int) -> None:
-    """Replace the worker's proxy after HOT_LIFETIME_SEC has passed."""
+    """Replace the worker's proxy and reset counters."""
     current = WORKER_PROXIES[worker_id]
-    PM.release(current)                 # send to cool‑down queue
+    PM.release(current)                 # send to cool-down queue
 
-    new_proxy = PM.acquire()            # get the oldest cooled‑down proxy
+    new_proxy = PM.acquire()            # get the oldest cooled-down proxy
     WORKER_PROXIES[worker_id] = new_proxy
 
     # reset request counter for new ip
@@ -117,7 +118,6 @@ def rotate_proxy(worker_id: int) -> None:
 
 
 # ───────────────────────── DB save ────────────────────────────────────
-
 
 @with_db_session
 async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session):
@@ -223,10 +223,12 @@ async def worker_chunk(
     last_switch = time.time()
 
     for w in wallets:
-        # time‑based proxy rotation every HOT_LIFETIME_SEC
+        # time-based proxy rotation every HOT_LIFETIME_SEC
         if time.time() - last_switch >= HOT_LIFETIME_SEC:
             rotate_proxy(worker_id)
             last_switch = time.time()
+            # two-minute pause after switch
+            await asyncio.sleep(ROTATION_PAUSE_SEC)
 
         try:
             await process_wallet(worker_id, w)
@@ -326,6 +328,8 @@ def main() -> None:
     if not proxies:
         logger.warning("proxies.txt missing or empty")
         return
+
+    logger.success("Loaded %d proxies", len(proxies))
 
     PM = ProxyManager(proxies, cool_down_sec=COOL_DOWN_SEC)
 
