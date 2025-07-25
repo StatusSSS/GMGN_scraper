@@ -33,13 +33,14 @@ API_TIMEOUT = int(os.getenv("GMGN_TIMEOUT", "30"))
 MAX_RETRIES = int(os.getenv("GMGN_RETRIES", "20"))
 MAX_WORKERS = int(os.getenv("GMGN_WORKERS", "20"))
 SHOW_BODY = int(os.getenv("GMGN_SHOW_BODY", "300"))
-AVG_DELAY = float(os.getenv("AVG_DELAY", "3.0"))
+# NOTE: AVG_DELAY is no longer used after switching to a fixed 2.5‑3 s interval
+AVG_DELAY = float(os.getenv("AVG_DELAY", "3.0"))  # kept for backward‑compatibility
 PROGRESS_EVERY = int(os.getenv("PROGRESS_EVERY", "100"))
 
 # ─────────────────────────── Proxy timing ────────────────────────────
-HOT_LIFETIME_SEC   = 8 * 60            # 8-minute working window
-ROTATION_PAUSE_SEC = 2 * 60            # 2-minute pause after switch
-COOL_DOWN_SEC      = 50 * 60           # 50-minute cool-down window (ProxyManager)
+HOT_LIFETIME_SEC   = 8 * 60            # 8‑minute working window
+ROTATION_PAUSE_SEC = 2 * 60            # 2‑minute pause after switch
+COOL_DOWN_SEC      = 50 * 60           # 50‑minute cool‑down window (ProxyManager)
 
 # ───────────────────────── Proxy globals ──────────────────────────────
 PM: ProxyManager  # set in main()
@@ -54,11 +55,14 @@ FAIL_WALLETS_FILE = "fail_wallets.txt"
 # ────────────────────────── helpers ───────────────────────────────────
 
 def human_pause() -> float:
-    """Exponential delay with rare long pauses."""
-    delay = random.expovariate(1 / AVG_DELAY)
-    if random.random() < 0.02:
-        delay += random.uniform(30, 90)
-    return delay
+    """Return a random delay between requests in the range **2.5 – 3.0 s**.
+
+    The previous implementation used an exponential distribution with the
+    possibility of rare long pauses.  Per the new requirements we now use a
+    simple *uniform* distribution confined to the desired interval, ensuring
+    every request is separated by roughly the same amount of time.
+    """
+    return random.uniform(2.5, 3.0)
 
 
 async def async_sleep_random():
@@ -67,7 +71,7 @@ async def async_sleep_random():
 
 def load_lines(path: str) -> List[str]:
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf‑8") as f:
             return [ln.strip() for ln in f if ln.strip()]
     except FileNotFoundError:
         logger.warning("File '{}' not found", path)
@@ -92,7 +96,7 @@ def log_http_error(e: HTTPError, wallet: str, attempt: int, proxy: str) -> None:
 
 def mark_failed_wallet(wallet: str) -> None:
     try:
-        with open(FAIL_WALLETS_FILE, "a+", encoding="utf-8") as f:
+        with open(FAIL_WALLETS_FILE, "a+", encoding="utf‑8") as f:
             f.seek(0)
             if wallet in {ln.strip() for ln in f}:
                 return
@@ -106,9 +110,9 @@ def mark_failed_wallet(wallet: str) -> None:
 def rotate_proxy(worker_id: int) -> None:
     """Replace the worker's proxy and reset counters."""
     current = WORKER_PROXIES[worker_id]
-    PM.release(current)                 # send to cool-down queue
+    PM.release(current)                 # send to cool‑down queue
 
-    new_proxy = PM.acquire()            # get the oldest cooled-down proxy
+    new_proxy = PM.acquire()            # get the oldest cooled‑down proxy
     WORKER_PROXIES[worker_id] = new_proxy
 
     # reset request counter for new ip
@@ -175,7 +179,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
                 e,
             )
 
-        time.sleep(1.5)
+        time.sleep(1.5)  # quick retry delay inside the retry loop
 
     return None
 
@@ -223,11 +227,11 @@ async def worker_chunk(
     last_switch = time.time()
 
     for w in wallets:
-        # time-based proxy rotation every HOT_LIFETIME_SEC
+        # time‑based proxy rotation every HOT_LIFETIME_SEC
         if time.time() - last_switch >= HOT_LIFETIME_SEC:
             rotate_proxy(worker_id)
             last_switch = time.time()
-            # two-minute pause after switch
+            # two‑minute pause after switch
             await asyncio.sleep(ROTATION_PAUSE_SEC)
 
         try:
@@ -240,6 +244,7 @@ async def worker_chunk(
         if done % PROGRESS_EVERY == 0 or done == total:
             logger.info("[{}] progress {} / {}", token, done, total)
 
+        # ⏲️  main inter‑request pause (2.5 – 3.0 s)
         await async_sleep_random()
 
     logger.info(
@@ -337,7 +342,7 @@ def main() -> None:
         try:
             asyncio.run(redis_loop())
         except KeyboardInterrupt:
-            logger.info("Stopped by Ctrl-C")
+            logger.info("Stopped by Ctrl‑C")
             break
         except Exception as exc:
             logger.exception("sync_scraper crash: {} — restart in 5s", exc)
