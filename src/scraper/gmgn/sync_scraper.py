@@ -31,43 +31,36 @@ QUEUE_NAME = os.getenv("REDIS_QUEUE", "wallet_queue")
 API_PERIOD = os.getenv("GMGN_PERIOD", "7d")
 API_TIMEOUT = int(os.getenv("GMGN_TIMEOUT", "30"))
 MAX_RETRIES = int(os.getenv("GMGN_RETRIES", "20"))
-MAX_WORKERS = int(os.getenv("GMGN_WORKERS", "20"))
+MAX_WORKERS = int(os.getenv("GMGN_WORKERS", "40"))  # ↑ increased to 40
 SHOW_BODY = int(os.getenv("GMGN_SHOW_BODY", "300"))
-# NOTE: AVG_DELAY is no longer used after switching to a fixed 2.5‑3 s interval
-AVG_DELAY = float(os.getenv("AVG_DELAY", "3.0"))  # kept for backward‑compatibility
-PROGRESS_EVERY = int(os.getenv("PROGRESS_EVERY", "100"))
 
-# ─────────────────────────── Proxy timing ────────────────────────────
-HOT_LIFETIME_SEC   = 8 * 60            # 8‑minute working window
-ROTATION_PAUSE_SEC = 2 * 60            # 2‑minute pause after switch
-COOL_DOWN_SEC      = 50 * 60           # 50‑minute cool‑down window (ProxyManager)
-
-# ───────────────────────── Proxy globals ──────────────────────────────
-PM: ProxyManager  # set in main()
-WORKER_PROXIES: Dict[int, str] = {}
-
-# request counter for fingerprint rotation
-PROXY_COUNTERS: Dict[str, int] = {}
-PROXY_COUNTERS_LOCK = threading.Lock()
-
-FAIL_WALLETS_FILE = "fail_wallets.txt"
-
-# ────────────────────────── helpers ───────────────────────────────────
+# ─────────────────────────── Delay ────────────────────────────────────
 
 def human_pause() -> float:
-    """Return a random delay between requests in the range **2.5 – 3.0 s**.
-
-    The previous implementation used an exponential distribution with the
-    possibility of rare long pauses.  Per the new requirements we now use a
-    simple *uniform* distribution confined to the desired interval, ensuring
-    every request is separated by roughly the same amount of time.
-    """
-    return random.uniform(2.5, 3.0)
+    """Return a random delay between requests in the range **3.0 – 3.5 s**."""
+    return random.uniform(3.0, 3.5)
 
 
 async def async_sleep_random():
     await asyncio.sleep(human_pause())
 
+
+PROGRESS_EVERY = int(os.getenv("PROGRESS_EVERY", "100"))
+
+# ───────────────────────── Proxy globals ──────────────────────────────
+PM: ProxyManager  # set in main()
+WORKER_PROXIES: Dict[int, str] = {}
+
+# request counters and error tracking
+PROXY_COUNTERS: Dict[str, int] = {}
+PROXY_ERRORS: Dict[str, int] = {}  # ← new per‑proxy consecutive error counter
+PROXY_LOCK = threading.Lock()
+
+ERROR_THRESHOLD = 10  # rotate proxy after this many consecutive failed wallets
+
+FAIL_WALLETS_FILE = "fail_wallets.txt"
+
+# ────────────────────────── helpers ───────────────────────────────────
 
 def load_lines(path: str) -> List[str]:
     try:
@@ -110,13 +103,14 @@ def mark_failed_wallet(wallet: str) -> None:
 def rotate_proxy(worker_id: int) -> None:
     """Replace the worker's proxy and reset counters."""
     current = WORKER_PROXIES[worker_id]
-    PM.release(current)                 # send to cool‑down queue
+    PM.release(current)  # send to cool‑down queue
 
-    new_proxy = PM.acquire()            # get the oldest cooled‑down proxy
+    new_proxy = PM.acquire()  # get the oldest cooled‑down proxy
     WORKER_PROXIES[worker_id] = new_proxy
 
-    # reset request counter for new ip
-    PROXY_COUNTERS[new_proxy] = 0
+    with PROXY_LOCK:
+        PROXY_COUNTERS[new_proxy] = 0
+        PROXY_ERRORS[new_proxy] = 0
 
     logger.info("[worker {}] proxy rotated: {} → {}", worker_id, current, new_proxy)
 
@@ -126,14 +120,16 @@ def rotate_proxy(worker_id: int) -> None:
 @with_db_session
 async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session):
     if pnl_value <= 0.6:
-        return
+        return False
     snapshot = Wallet(address=wallet, pnl=round(pnl_value, 3))
     db_session.add(snapshot)
     try:
         await db_session.flush()
         logger.success("Snapshot saved for {} (PnL {:.3f})", wallet, pnl_value)
+        return True
     except IntegrityError:
         await db_session.rollback()
+        return False
 
 
 # ────────────────── HTTP request (sync, thread) ───────────────────────
@@ -147,8 +143,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     url = f"https://gmgn.ai/api/v1/wallet_stat/sol/{wallet}/{API_PERIOD}"
 
     for attempt in range(1, MAX_RETRIES + 1):
-        # fingerprint selection
-        with PROXY_COUNTERS_LOCK:
+        with PROXY_LOCK:
             cnt = PROXY_COUNTERS[proxy_str]
             PROXY_COUNTERS[proxy_str] += 1
         headers, params = fp.pick_headers_params(proxy_str, cnt)
@@ -186,23 +181,25 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
 
 # ───────────────────────── worker helpers ────────────────────────────
 
-async def process_wallet(worker_id: int, wallet: str) -> None:
+async def process_wallet(worker_id: int, wallet: str) -> bool:
+    """Process one wallet. Returns **True** on success, **False** on error."""
     loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(None, fetch_wallet_stat, worker_id, wallet)
 
     if data is None:
         mark_failed_wallet(wallet)
         logger.warning("{}… failed after {} retries", wallet[:6], MAX_RETRIES)
-        return
+        return False
 
     try:
         pnl_value = data["data"]["pnl"]
     except (KeyError, TypeError):
         logger.error("[{}] Unexpected API payload: {}", wallet[:6], data)
-        return
+        return False
 
     logger.info("[worker {}] {}… PnL {:.3f}", worker_id, wallet[:6], pnl_value)
     await save_snapshot_if_positive(wallet, pnl_value)
+    return True
 
 
 # ───────────────────────── worker coroutine ───────────────────────────
@@ -224,27 +221,32 @@ async def worker_chunk(
         WORKER_PROXIES[worker_id],
     )
 
-    last_switch = time.time()
+    error_streak = 0
 
     for w in wallets:
-        # time‑based proxy rotation every HOT_LIFETIME_SEC
-        if time.time() - last_switch >= HOT_LIFETIME_SEC:
-            rotate_proxy(worker_id)
-            last_switch = time.time()
-            # two‑minute pause after switch
-            await asyncio.sleep(ROTATION_PAUSE_SEC)
-
         try:
-            await process_wallet(worker_id, w)
+            ok = await process_wallet(worker_id, w)
         except Exception as e:
+            ok = False
             logger.exception("[worker {}] unhandled on wallet {}: {}", worker_id, w, e)
+
+        if ok:
+            error_streak = 0
+        else:
+            error_streak += 1
+            with PROXY_LOCK:
+                PROXY_ERRORS[WORKER_PROXIES[worker_id]] = error_streak
+            if error_streak >= ERROR_THRESHOLD:
+                logger.warning("[worker {}] {} consecutive failures — rotating proxy", worker_id, error_streak)
+                rotate_proxy(worker_id)
+                error_streak = 0  # reset after switch
 
         processed[0] += 1
         done = processed[0]
         if done % PROGRESS_EVERY == 0 or done == total:
             logger.info("[{}] progress {} / {}", token, done, total)
 
-        # ⏲️  main inter‑request pause (2.5 – 3.0 s)
+        # ⏲️  per‑request pause (3.0 – 3.5 s)
         await async_sleep_random()
 
     logger.info(
@@ -266,6 +268,7 @@ async def handle_batch(wallets: List[str], *, token: str, src: str):
         fp.init_proxies(PM.ready)
         for p in PM.ready:
             PROXY_COUNTERS[p] = 0
+            PROXY_ERRORS[p] = 0
 
     n = min(MAX_WORKERS, len(PM.ready) + len(PM.cooling), total)
     if n == 0:
@@ -276,6 +279,7 @@ async def handle_batch(wallets: List[str], *, token: str, src: str):
     initial = [PM.acquire() for _ in range(n)]
     for proxy in initial:
         PROXY_COUNTERS[proxy] = 0
+        PROXY_ERRORS[proxy] = 0
 
     global WORKER_PROXIES
     WORKER_PROXIES = {i: initial[i] for i in range(n)}
@@ -336,7 +340,7 @@ def main() -> None:
 
     logger.success("Loaded %d proxies", len(proxies))
 
-    PM = ProxyManager(proxies, cool_down_sec=COOL_DOWN_SEC)
+    PM = ProxyManager(proxies, cool_down_sec=50 * 60)  # 50‑minute cool‑down
 
     while True:
         try:
