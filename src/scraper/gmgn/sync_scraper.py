@@ -31,7 +31,7 @@ QUEUE_NAME = os.getenv("REDIS_QUEUE", "wallet_queue")
 API_PERIOD = os.getenv("GMGN_PERIOD", "7d")
 API_TIMEOUT = int(os.getenv("GMGN_TIMEOUT", "30"))
 MAX_RETRIES = int(os.getenv("GMGN_RETRIES", "20"))
-MAX_WORKERS = int(os.getenv("GMGN_WORKERS", "40"))  # ↑ increased to 40
+MAX_WORKERS = int(os.getenv("GMGN_WORKERS", "1"))  # ↑ increased to 40
 SHOW_BODY = int(os.getenv("GMGN_SHOW_BODY", "300"))
 
 # ─────────────────────────── Delay ────────────────────────────────────
