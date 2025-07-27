@@ -161,11 +161,11 @@ class Identity:
         return h, p
 
 # ────────────────── кеш «личностей» по IP/прокси ─────────────────────
-IDENTITIES_PER_PROXY = 3              # сколько отпечатков на один IP
+IDENTITIES_PER_PROXY = 4
 PROXY_IDENTITIES: Dict[str, deque[Identity]] = {}
 LAST_SWITCH: Dict[str, float] = {}
 
-ROTATE_EVERY_N   = 200               # запросов
+ROTATE_EVERY_N   = random.randint(50, 80)
 ROTATE_EVERY_SEC = 30 * 60           # секунд (30 минут)
 
 def init_proxies(proxy_list: List[str] | None = None) -> None:
