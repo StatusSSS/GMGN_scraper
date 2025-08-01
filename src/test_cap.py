@@ -23,25 +23,22 @@ def get_task() -> dict:
     return json.loads(raw)           # {"proxy": "ip:port:user:pwd", "ua": …}
 
 def reload_tinyproxy(proxy: str):
-    """Создаёт базовый конфиг, вставляет Upstream, посылает SIGHUP."""
     host, port, user, pwd = proxy.split(":", 3)
-    upstream = f"Upstream http {user}:{pwd}@{host} {port}"
 
-    # ① гарантируем существование базового конфига
+    # правильный синтаксис: host:port в одном токене
+    upstream = f"Upstream http {user}:{pwd}@{host}:{port}"
+
+    # ── остальное без изменений ─────────────────────────────
     if not TINY_CONF.exists():
         TINY_CONF.parent.mkdir(parents=True, exist_ok=True)
         TINY_CONF.write_text(BASE_CONF)
 
-    # ② собираем новый конфиг без дубликатов Upstream
     lines = [ln for ln in TINY_CONF.read_text().splitlines()
              if not ln.startswith("Upstream ")]
     lines.append(upstream)
     TINY_CONF.write_text("\n".join(lines) + "\n")
-
-    # ③ печатаем для отладки
     print("[tinyproxy] new config ↓\n" + TINY_CONF.read_text())
 
-    # ④ мягко перезагружаем tinyproxy
     if TINY_PID.exists():
         os.kill(int(TINY_PID.read_text().strip()), signal.SIGHUP)
     else:
