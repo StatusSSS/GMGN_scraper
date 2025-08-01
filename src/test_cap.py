@@ -13,7 +13,7 @@ WAIT_FOR_CLICK = int(os.getenv("WAIT_FOR_CLICK", 600))
 
 TINY_CONF = Path("/etc/tinyproxy/tinyproxy.conf")
 TINY_PID  = Path("/var/run/tinyproxy.pid")  # где tinyproxy пишет pid
-
+BASE_CONF = "Port 8888\nListen 0.0.0.0\nMaxClients 50\n"
 rds = redis.Redis(REDIS_HOST, REDIS_PORT, decode_responses=True)
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -23,22 +23,30 @@ def get_task() -> dict:
     return json.loads(raw)           # {"proxy": "ip:port:user:pwd", "ua": …}
 
 def reload_tinyproxy(proxy: str):
+    """Создаёт базовый конфиг, вставляет Upstream, посылает SIGHUP."""
     host, port, user, pwd = proxy.split(":", 3)
-    upstream_line = f"Upstream http {user}:{pwd}@{host} {port}\n"
+    upstream = f"Upstream http {user}:{pwd}@{host} {port}"
 
-    # переписываем конфиг (первая часть уже содержит Port/Listen/MaxClients)
-    cfg = TINY_CONF.read_text().splitlines()
-    cfg = [ln for ln in cfg if not ln.startswith("Upstream ")]
-    cfg.append(upstream_line)
-    TINY_CONF.write_text("\n".join(cfg) + "\n")
+    # ① гарантируем существование базового конфига
+    if not TINY_CONF.exists():
+        TINY_CONF.parent.mkdir(parents=True, exist_ok=True)
+        TINY_CONF.write_text(BASE_CONF)
 
+    # ② собираем новый конфиг без дубликатов Upstream
+    lines = [ln for ln in TINY_CONF.read_text().splitlines()
+             if not ln.startswith("Upstream ")]
+    lines.append(upstream)
+    TINY_CONF.write_text("\n".join(lines) + "\n")
+
+    # ③ печатаем для отладки
+    print("[tinyproxy] new config ↓\n" + TINY_CONF.read_text())
+
+    # ④ мягко перезагружаем tinyproxy
     if TINY_PID.exists():
-        pid = int(TINY_PID.read_text().strip())
-        os.kill(pid, signal.SIGHUP)          # мягкий reload
-        print(f"[tinyproxy] reloaded for {host}:{port}")
+        os.kill(int(TINY_PID.read_text().strip()), signal.SIGHUP)
     else:
-        # fallback – старта не было? (не должно случиться)
-        subprocess.Popen(["tinyproxy", "-c", str(TINY_CONF)])
+        subprocess.Popen(["tinyproxy", "-d", "-c", str(TINY_CONF)])
+    print(f"[tinyproxy] reloaded for {host}:{port}")
 
 def build_opts(ua: str) -> Options:
     opts = Options()
