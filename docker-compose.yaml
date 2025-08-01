@@ -3,18 +3,15 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
+    ports: ["6379:6379"]
+    volumes: [redis-data:/data]
 
   # ────────── Selenium #1 — DexScreener ──────────
   selenium_dex:
     image: selenium/standalone-chrome:4.21.0-20240521
     container_name: selenium-dex
     shm_size: "2g"
-    ports:
-      - "4444:4444"            # UI/VNC; уберите, если не нужен наружу
+    ports: ["4444:4444"]          # UI/VNC наружу (уберите, если не нужно)
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'"]
       interval: 5s
@@ -27,10 +24,8 @@ services:
     image: selenium/standalone-chrome:4.21.0-20240521
     container_name: selenium-testcap
     shm_size: "2g"
-    environment:
-    - SE_NODE_HEADLESS=false
-    ports:
-    - "4445:4444"
+    environment: [SE_NODE_HEADLESS=false]
+    ports: ["4445:4444"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'"]
       interval: 5s
@@ -46,8 +41,7 @@ services:
         condition: service_healthy
     environment:
       - SELENIUM_SERVER_URL=http://selenium_dex:4444/wd/hub
-    volumes:
-      - ./output:/app/output
+    volumes: ["./output:/app/output"]
 
   # ───────────────── Producer ─────────────────
   producer:
@@ -61,14 +55,39 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
-
       REDIS_HOST: redis
       REDIS_PORT: 6379
       DELAY_SEC: ${DELAY_SEC:-10}
-    volumes:
-      - ./:/src
+    volumes: ["./:/src"]
+    depends_on: [redis]
+
+  # ───────────────── cookie_init (одноразовый) ─────────────────
+  cookie_init:
+    build: .
+    command: python -m src.scraper.gmgn.push_cookie_tasks   # проверь путь!
+    restart: "no"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on: [redis]
+
+  # ───────────────── test_cap (получает cookies) ─────────────────
+  test_cap:
+    build:
+      context: .
+      dockerfile: ./Dockerfiles/Dockerfile.test_cap
+    # CMD берётся из Dockerfile.test_cap (python -m src.test_cap)
+    environment:
+      - SELENIUM_SERVER_URL=http://selenium_testcap:4444/wd/hub
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - WAIT_FOR_CLICK=600          # при желании уменьшите
+    volumes: ["./cookies:/app/cookies"]
     depends_on:
-      - redis
+      selenium_testcap:
+        condition: service_healthy
+      cookie_init:
+        condition: service_completed_successfully
 
   # ───────────────── Worker (gmgn sync_scraper) ─────────────────
   worker:
@@ -77,35 +96,24 @@ services:
       dockerfile: ./Dockerfiles/Dockerfile.pnl_produces
     command: python -m src.scraper.gmgn.sync_scraper
     environment:
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      RESET_QUEUE: "1"
-      SELENIUM_SERVER_URL: http://selenium_dex:4444/wd/hub
-    volumes:
-      - ./:/src
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - RESET_QUEUE=1
+      - SELENIUM_SERVER_URL=http://selenium_dex:4444/wd/hub
+    volumes: [ "./:/src" ]
     depends_on:
-      - redis
-      - selenium_dex
+      redis: # подождать, пока контейнер запущен
+        condition: service_started
+      selenium_dex: # дождаться health-check’а
+        condition: service_healthy
+      cookie_init: # дождаться успешного завершения скрипта
+        condition: service_completed_successfully
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "1"
 
-  # ───────────────── test_cap ─────────────────
-  test_cap:
-    build:
-      context: .
-      dockerfile: ./Dockerfiles/Dockerfile.test_cap
-    environment:
-      - SELENIUM_SERVER_URL=http://selenium_testcap:4444/wd/hub
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    volumes:
-      - ./cookies:/app/cookies
-    depends_on:
-      selenium_testcap:
-        condition: service_healthy
 
 volumes:
   redis-data:
