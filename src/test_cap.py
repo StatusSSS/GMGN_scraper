@@ -1,9 +1,10 @@
+#!/usr/bin/env python
 # test_cap.py
-import json, os, time, redis, sys
+import base64, json, os, sys, time, redis
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-import sys
+from selenium.webdriver.remote.webdriver import WebDriver
+
 # ─── конфиг ─────────────────────────────────────────────────────────
 REDIS_HOST  = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT  = int(os.getenv("REDIS_PORT", 6379))
@@ -13,48 +14,59 @@ API_URL        = "https://gmgn.ai/new-pair"
 WAIT_FOR_CLICK = int(os.getenv("WAIT_FOR_CLICK", 600))   # время на клик, сек
 
 rds = redis.Redis(REDIS_HOST, REDIS_PORT, decode_responses=True)
+sys.stdout.reconfigure(line_buffering=True)              # мгновенный вывод логов
 
-
-sys.stdout.reconfigure(line_buffering=True)
-
-
+# ─── Redis helpers ──────────────────────────────────────────────────
 def get_task() -> dict:
-    """Берём след. proxy+UA (блокируется, пока очередь пуста)."""
+    """Блокируется, пока в очереди cookie_tasks нет заданий."""
     _key, raw = rds.blpop("cookie_tasks")
-    return json.loads(raw)
+    return json.loads(raw)           # {"proxy": "ip:port:user:pwd", "ua": "…"}
 
-def build_opts(proxy: str, ua: str) -> Options:
+# ─── Proxy helpers ─────────────────────────────────────────────────
+def build_opts(proxy: str, ua: str) -> tuple[Options, tuple[str, str]]:
+    """Возвращает ChromeOptions и пару (заголовок, значение) для Proxy-Auth."""
+    host, port, user, pwd = proxy.split(":", 3)
+
     opts = Options()
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument(f"--user-agent={ua}")
+    # без учётки — Chrome иначе ответит ERR_NO_SUPPORTED_PROXIES
+    opts.add_argument(f"--proxy-server=http://{host}:{port}")
 
-    host, port, user, pwd = proxy.split(":", 3)
-    opts.add_argument(f"--proxy-server=http://{user}:{pwd}@{host}:{port}")
-    return opts
+    token = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+    return opts, ("Proxy-Authorization", f"Basic {token}")
 
-def save_cookies(proxy: str, ua: str, driver: webdriver.Remote) -> None:
-    cookies = driver.get_cookies()
+def inject_header(driver: WebDriver, header: tuple[str, str]) -> None:
+    """Добавляет заголовок через CDP: Network.setExtraHTTPHeaders."""
+    name, value = header
+    driver.execute_cdp_cmd("Network.enable", {})
+    driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {"headers": {name: value}})
+
+# ─── cookies helpers ───────────────────────────────────────────────
+def save_cookies(proxy: str, ua: str, driver: WebDriver) -> None:
     key = f"cookies:{proxy}"
-    rds.set(key, json.dumps({"ua": ua, "cookies": cookies}))
+    rds.set(key, json.dumps({"ua": ua, "cookies": driver.get_cookies()}))
     print(f"[OK] cookies сохранены в Redis → {key}")
 
 def wait_manual_click(timeout: int) -> None:
     print(f"⏳  Жду ваш клик reCAPTCHA (до {timeout} с)…")
     time.sleep(timeout)
 
-# ─── главный цикл ───────────────────────────────────────────────────
+# ─── главный цикл ──────────────────────────────────────────────────
 while True:
-    task = get_task()               # {"proxy": "ip:port:user:pwd", "ua": "..."}
+    task = get_task()
     proxy, ua = task["proxy"], task["ua"]
     print("\n" + "=" * 60)
     print(f"Proxy: {proxy}\nUA: {ua}")
 
-    driver = webdriver.Remote(command_executor=SELENIUM_URL,
-                              options=build_opts(proxy, ua))
+    opts, auth_header = build_opts(proxy, ua)
+    driver = webdriver.Remote(command_executor=SELENIUM_URL, options=opts)
 
     try:
+        inject_header(driver, auth_header)     # ← авторизация к прокси
         driver.get(API_URL)
+
         wait_manual_click(WAIT_FOR_CLICK)
         save_cookies(proxy, ua, driver)
 
