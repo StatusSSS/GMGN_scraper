@@ -1,24 +1,26 @@
-# ----- базовый образ -------------------------------------------------
+# Dockerfiles/Dockerfile.test_cap
 FROM python:3.11-slim
 
-# ----- системные пакеты (curl_cffi → libcurl) ------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        libcurl4-openssl-dev \
-        libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+# ─── системные пакеты ────────────────────────────────────────────────
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tinyproxy && \
+    rm -rf /var/lib/apt/lists/*
 
-# ----- рабочая папка -------------------------------------------------
+# ─── базовый конфиг tinyproxy (без Upstream) ─────────────────────────
+RUN printf 'Port 8888\nListen 0.0.0.0\nMaxClients 50\n' \
+      > /etc/tinyproxy/tinyproxy.conf
+
+# ─── Python-зависимости ──────────────────────────────────────────────
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# ─── копируем исходники и entrypoint ────────────────────────────────
 WORKDIR /src
-
-# ----- зависимости Python -------------------------------------------
-COPY ../requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# ----- исходники -----------------------------------------------------
 COPY . .
+
+COPY Dockerfiles/entrypoint_testcap.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1
 
-# Команда задаётся в docker-compose (producer/worker разные)
-CMD ["python", "-m", "src.test_cap"]
+ENTRYPOINT ["/entrypoint.sh"]
