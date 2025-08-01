@@ -1,4 +1,5 @@
 services:
+  # ───────────────── Redis ─────────────────
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -7,36 +8,54 @@ services:
     volumes:
       - redis-data:/data
 
-  selenium:
+  # ────────── Selenium #1 — DexScreener ──────────
+  selenium_dex:
     image: selenium/standalone-chrome:4.21.0-20240521
+    container_name: selenium-dex
     shm_size: "2g"
     ports:
-      - "4444:4444"
+      - "4444:4444"            # UI/VNC; уберите, если не нужен наружу
     healthcheck:
-      test: [ "CMD-SHELL", "curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'" ]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'"]
       interval: 5s
       timeout: 5s
       retries: 12
       start_period: 5s
 
+  # ────────── Selenium #2 — test_cap ──────────
+  selenium_testcap:
+    image: selenium/standalone-chrome:4.21.0-20240521
+    container_name: selenium-testcap
+    shm_size: "2g"
+    environment:
+    - SE_NODE_HEADLESS=false
+    ports:
+    - "4445:4444"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  # ───────────────── Scraper (DexScreener) ─────────────────
   scraper:
     build: .
     depends_on:
-      selenium:
+      selenium_dex:
         condition: service_healthy
     environment:
-      - SELENIUM_SERVER_URL=http://selenium:4444
+      - SELENIUM_SERVER_URL=http://selenium_dex:4444/wd/hub
     volumes:
       - ./output:/app/output
 
+  # ───────────────── Producer ─────────────────
   producer:
     build:
       context: .
       dockerfile: Dockerfiles/Dockerfile.pnl_produces
-    command: >
-      python -m src.pnl.pnl_producer
+    command: python -m src.pnl.pnl_producer
     environment:
-
       CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
       CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
@@ -45,34 +64,48 @@ services:
 
       REDIS_HOST: redis
       REDIS_PORT: 6379
-
       DELAY_SEC: ${DELAY_SEC:-10}
     volumes:
       - ./:/src
     depends_on:
       - redis
 
+  # ───────────────── Worker (gmgn sync_scraper) ─────────────────
   worker:
     build:
       context: .
       dockerfile: ./Dockerfiles/Dockerfile.pnl_produces
-    command: >
-      python -m src.scraper.gmgn.sync_scraper
+    command: python -m src.scraper.gmgn.sync_scraper
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       RESET_QUEUE: "1"
+      SELENIUM_SERVER_URL: http://selenium_dex:4444/wd/hub
     volumes:
       - ./:/src
     depends_on:
       - redis
-      - selenium
-
+      - selenium_dex
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "1"
+
+  # ───────────────── test_cap ─────────────────
+  test_cap:
+    build:
+      context: .
+      dockerfile: ./Dockerfiles/Dockerfile.test_cap
+    environment:
+      - SELENIUM_SERVER_URL=http://selenium_testcap:4444/wd/hub
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./cookies:/app/cookies
+    depends_on:
+      selenium_testcap:
+        condition: service_healthy
 
 volumes:
   redis-data:

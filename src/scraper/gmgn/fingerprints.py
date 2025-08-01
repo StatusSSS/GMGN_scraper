@@ -1,17 +1,16 @@
 # src/scraper/gmgn/fingerprints.py
 """
-Генерация и кеширование «личностей» (статичных browser-fingerprints)
-для скрейпера gmgn.ai.
+Генерирует и кеш-ирует статичные browser-fingerprints
+для gmgn.ai. На каждый proxy-IP создаём ровно одну
+«личность» (index 0), которую используем всегда.
 """
 
 from __future__ import annotations
-import random, uuid, hashlib, time, datetime as dt
-from collections import deque
+import random, uuid, hashlib, datetime as dt
 from typing import Dict, Tuple, List
 
 # ────────────────── источники реальных значений ────────────────────
 _BROWSERS: List[tuple[str, str]] = [
-    # (brand, UA-template)
     (
         "Google Chrome",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -36,27 +35,18 @@ _PLATFORMS = [
 ]
 
 _LANGS = ["ru", "en", "de", "es"]
+_TZS   = [("Europe/Moscow", 10800),
+          ("Europe/Berlin",  7200),
+          ("Asia/Tokyo",   32400)]
 
-_TZS = [
-    ("Europe/Moscow",  10800),
-    ("Europe/Berlin",   7200),
-    ("Asia/Tokyo",    32400),
-]
-
-# ────────────────── базовые генераторы ──────────────────────────────
-def _uid() -> str:
-    """32-символьный hex UUID4."""
-    return uuid.uuid4().hex
-
+# ────────────────── helpers ─────────────────────────────────────────
+_uid  = lambda: uuid.uuid4().hex
 
 def _build_stamp() -> str:
-    """Версия вида 20250721-123-abcdef0 (дата-рандом-соль)."""
     today = dt.datetime.utcnow().strftime("%Y%m%d")
     return f"{today}-{random.randint(50,1500)}-{_uid()[:7]}"
 
-
 def _build_baggage() -> str:
-    """Sentry baggage (новый каждый запрос)."""
     return (
         "sentry-environment=production,"
         f"sentry-release={_build_stamp()},"
@@ -65,16 +55,14 @@ def _build_baggage() -> str:
         "sentry-sample_rate=0.005,sentry-sampled=false"
     )
 
-
 def _build_trace() -> str:
-    """sentry-trace (traceId-spanId-sampled)."""
     return f"{_uid()}-{_uid()[:16]}-0"
 
-# ────────────────── статичные части fingerprint ─────────────────────
+# ────────────────── конструкторы fingerprint ───────────────────────
 def _build_static_headers(rnd: random.Random) -> Dict[str, str]:
     brand, ua_tpl = rnd.choice(_BROWSERS)
-    major        = rnd.randint(133, 140)
-    ua           = ua_tpl.format(major=major)
+    major = rnd.randint(133, 140)
+    ua    = ua_tpl.format(major=major)
 
     platform, platform_ver, arch, bits = rnd.choice(_PLATFORMS)
     full_ver = f"{major}.0.{rnd.randint(4000,8000)}.{rnd.randint(50,200)}"
@@ -95,7 +83,7 @@ def _build_static_headers(rnd: random.Random) -> Dict[str, str]:
         "accept-language": f"ru-RU,ru;q=0.9,{rnd.choice(_LANGS)}-US;q=0.8,en;q=0.7",
         "User-Agent": ua,
 
-        # UA-Client-Hints (фиксируем!)
+        # UA-Client-Hints (фиксированные)
         "sec-ch-ua-full-version-list": full_list,
         "sec-ch-ua-full-version":      f'"{full_ver}"',
         "sec-ch-ua":                   sec_ch,
@@ -106,13 +94,9 @@ def _build_static_headers(rnd: random.Random) -> Dict[str, str]:
         "sec-ch-ua-model":             '""',
         "sec-ch-ua-mobile":            "?0",
 
-        # volatile поля (поставим плейсхолдеры, заменим при .fresh())
-        "baggage":      "",
-        "sentry-trace": "",
-
-        # Referer добавляется в запросе (зависит от wallet)
+        # будут обновлены в .fresh()
+        "baggage": "", "sentry-trace": "",
     }
-
 
 def _build_static_params(rnd: random.Random) -> Dict[str, str]:
     tz_name, tz_offset = rnd.choice(_TZS)
@@ -128,7 +112,6 @@ def _build_static_params(rnd: random.Random) -> Dict[str, str]:
         "fp_did":    hashlib.md5(_uid().encode()).hexdigest(),
         "os":        "web",
 
-        # неизменные фильтры
         "limit": "50",
         "orderby": "last_active_timestamp",
         "direction": "desc",
@@ -137,67 +120,37 @@ def _build_static_params(rnd: random.Random) -> Dict[str, str]:
         "tx30d":     "true",
     }
 
-# ────────────────── объект Identity ──────────────────────────────────
+# ────────────────── объект Identity ────────────────────────────────
 class Identity:
-    """
-    Статичный fingerprint (UA + UA-Client-Hints + params).
-    .fresh() добавляет только «живые» поля (baggage, trace, fp_did).
-    """
+    """Статичный fingerprint + метод fresh() для volatile-полей."""
     def __init__(self, rnd: random.Random | None = None):
-        if rnd is None:
-            rnd = random.Random(uuid.uuid4().int)
+        rnd = rnd or random.Random(uuid.uuid4().int)
         self.static_headers = _build_static_headers(rnd)
         self.static_params  = _build_static_params(rnd)
 
     def fresh(self) -> Tuple[Dict[str, str], Dict[str, str]]:
-        h = self.static_headers.copy()
-        p = self.static_params.copy()
-
-        # volatile — обновляем каждое обращение
+        h, p = self.static_headers.copy(), self.static_params.copy()
         h["baggage"]      = _build_baggage()
         h["sentry-trace"] = _build_trace()
         p["fp_did"]       = hashlib.md5(_uid().encode()).hexdigest()
-
         return h, p
 
-# ────────────────── кеш «личностей» по IP/прокси ─────────────────────
-IDENTITIES_PER_PROXY = 4
-PROXY_IDENTITIES: Dict[str, deque[Identity]] = {}
-LAST_SWITCH: Dict[str, float] = {}
-
-ROTATE_EVERY_N   = random.randint(50, 80)
-ROTATE_EVERY_SEC = 30 * 60           # секунд (30 минут)
+# ────────────────── кеш «личностей» по proxy-IP ────────────────────
+PROXY_IDENTITIES: Dict[str, Identity] = {}
 
 def init_proxies(proxy_list: List[str] | None = None) -> None:
     """
-    Подготовить deque из Identity для каждого IP/прокси.
-    Если список пустой → создаётся один ключ 'local'.
+    На каждый proxy-IP создаём одну Identity с детерминированным сидом
+    f\"{proxy}-0\" — чтобы UA совпадал с push_cookie_tasks / test_cap.
     """
     if not proxy_list:
         proxy_list = ["local"]
 
-    global PROXY_IDENTITIES, LAST_SWITCH
+    global PROXY_IDENTITIES
     PROXY_IDENTITIES = {
-        p: deque(
-            Identity(random.Random(f"{p}-{i}"))
-            for i in range(IDENTITIES_PER_PROXY)
-        )
-        for p in proxy_list
+        p: Identity(random.Random(f"{p}-0")) for p in proxy_list
     }
-    LAST_SWITCH = {p: 0.0 for p in proxy_list}
 
-
-def pick_headers_params(proxy: str, counter: int) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """
-    Вернуть (headers, params) для текущей «личности» данного proxy-IP.
-    Ротация раз в ROTATE_EVERY_N запросов **или** каждые ROTATE_EVERY_SEC секунд.
-    """
-    dq = PROXY_IDENTITIES[proxy]
-    if (
-        counter % ROTATE_EVERY_N == 0
-        or time.time() - LAST_SWITCH[proxy] > ROTATE_EVERY_SEC
-    ):
-        dq.rotate()
-        LAST_SWITCH[proxy] = time.time()
-
-    return dq[0].fresh()
+def pick_headers_params(proxy: str, _: int = 0) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Возвращает (headers, params) «личности» этого proxy — без ротации."""
+    return PROXY_IDENTITIES[proxy].fresh()
