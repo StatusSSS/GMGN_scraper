@@ -64,12 +64,14 @@ services:
   # ───────────────── cookie_init (одноразовый) ─────────────────
   cookie_init:
     build: .
-    command: python -m src.scraper.gmgn.push_cookie_tasks   # проверь путь!
+    entrypoint: [ "python", "-m", "src.scraper.gmgn.push_cookie_tasks" ]
     restart: "no"
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-    depends_on: [redis]
+    depends_on:
+      redis:
+        condition: service_started
 
   # ───────────────── test_cap (получает cookies) ─────────────────
   test_cap:
