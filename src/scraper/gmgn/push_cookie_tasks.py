@@ -27,7 +27,7 @@ r = redis.Redis(
 )
 
 # ─── список прокси (ip:port) ────────────────────────────────────────
-proxies = load_lines("src/scraper/gmgn/proxies_cap.txt")
+proxies = load_lines("src/scraper/gmgn/proxies.txt")
 if not proxies:
     raise SystemExit("proxies_cap.txt пуст или не найден")
 
