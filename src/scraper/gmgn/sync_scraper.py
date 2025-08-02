@@ -33,7 +33,7 @@ API_TIMEOUT      = int(os.getenv("GMGN_TIMEOUT", "30"))
 MAX_RETRIES      = int(os.getenv("GMGN_RETRIES", "20"))
 MAX_WORKERS      = int(os.getenv("GMGN_WORKERS", "5"))
 SHOW_BODY        = int(os.getenv("GMGN_SHOW_BODY", "300"))
-AVG_DELAY        = float(os.getenv("AVG_DELAY", "9"))
+AVG_DELAY        = float(os.getenv("AVG_DELAY", "5"))
 PROGRESS_EVERY   = int(os.getenv("PROGRESS_EVERY", "100"))
 
 COOL_DOWN_SEC    = 30 * 60        # оставлен для совместимости

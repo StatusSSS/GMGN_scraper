@@ -1,15 +1,27 @@
 # src/scraper/gmgn/fingerprints.py
 """
-Генерирует и кеш-ирует статичные browser-fingerprints
-для gmgn.ai. На каждый proxy-IP создаём ровно одну
-«личность» (index 0), которую используем всегда.
+Генерирует и кеш-ирует статичные browser-fingerprints для gmgn.ai.
+
+На каждый proxy-IP создаётся **одна** «личность» с User-Agent
+`Chrome/120.0.0.0` — чтобы совпадать с curl_cffi impersonate="chrome120".
 """
 
 from __future__ import annotations
-import random, uuid, hashlib, datetime as dt
-from typing import Dict, Tuple, List
 
-# ────────────────── источники реальных значений ────────────────────
+import datetime as dt
+import hashlib
+import random
+import uuid
+from typing import Dict, List, Tuple
+
+# ─────────────────────────── constants ────────────────────────────
+CHROME_MAJOR = 120                  # ★ тот же major, что в curl_cffi
+
+_LANGS = ["ru", "en", "de", "es"]
+_TZS   = [("Europe/Moscow", 10800),
+          ("Europe/Berlin",  7200),
+          ("Asia/Tokyo",   32400)]
+
 _BROWSERS: List[tuple[str, str]] = [
     (
         "Google Chrome",
@@ -34,17 +46,14 @@ _PLATFORMS = [
     ("Linux",   "6.9",    "x86", "64"),
 ]
 
-_LANGS = ["ru", "en", "de", "es"]
-_TZS   = [("Europe/Moscow", 10800),
-          ("Europe/Berlin",  7200),
-          ("Asia/Tokyo",   32400)]
+# ─────────────────────────── helpers ───────────────────────────────
+_uid = lambda: uuid.uuid4().hex
 
-# ────────────────── helpers ─────────────────────────────────────────
-_uid  = lambda: uuid.uuid4().hex
 
 def _build_stamp() -> str:
     today = dt.datetime.utcnow().strftime("%Y%m%d")
-    return f"{today}-{random.randint(50,1500)}-{_uid()[:7]}"
+    return f"{today}-{random.randint(50, 1500)}-{_uid()[:7]}"
+
 
 def _build_baggage() -> str:
     return (
@@ -55,17 +64,18 @@ def _build_baggage() -> str:
         "sentry-sample_rate=0.005,sentry-sampled=false"
     )
 
+
 def _build_trace() -> str:
     return f"{_uid()}-{_uid()[:16]}-0"
 
-# ────────────────── конструкторы fingerprint ───────────────────────
+# ───────────────────── fingerprint builders ────────────────────────
 def _build_static_headers(rnd: random.Random) -> Dict[str, str]:
     brand, ua_tpl = rnd.choice(_BROWSERS)
-    major = rnd.randint(133, 140)
+    major = CHROME_MAJOR                     # ★ фиксированный
     ua    = ua_tpl.format(major=major)
 
     platform, platform_ver, arch, bits = rnd.choice(_PLATFORMS)
-    full_ver = f"{major}.0.{rnd.randint(4000,8000)}.{rnd.randint(50,200)}"
+    full_ver = f"{major}.0.{rnd.randint(4000, 8000)}.{rnd.randint(50, 200)}"
 
     full_list = ", ".join([
         f'"{brand}";v="{full_ver}"',
@@ -94,9 +104,10 @@ def _build_static_headers(rnd: random.Random) -> Dict[str, str]:
         "sec-ch-ua-model":             '""',
         "sec-ch-ua-mobile":            "?0",
 
-        # будут обновлены в .fresh()
+        # будет обновлено в .fresh()
         "baggage": "", "sentry-trace": "",
     }
+
 
 def _build_static_params(rnd: random.Random) -> Dict[str, str]:
     tz_name, tz_offset = rnd.choice(_TZS)
@@ -112,36 +123,40 @@ def _build_static_params(rnd: random.Random) -> Dict[str, str]:
         "fp_did":    hashlib.md5(_uid().encode()).hexdigest(),
         "os":        "web",
 
-        "limit": "50",
-        "orderby": "last_active_timestamp",
-        "direction": "desc",
-        "showsmall": "true",
-        "sellout":   "true",
-        "tx30d":     "true",
+        # неизменные фильтры
+        "limit":      "50",
+        "orderby":    "last_active_timestamp",
+        "direction":  "desc",
+        "showsmall":  "true",
+        "sellout":    "true",
+        "tx30d":      "true",
     }
 
-# ────────────────── объект Identity ────────────────────────────────
+# ──────────────────────── Identity object ──────────────────────────
 class Identity:
-    """Статичный fingerprint + метод fresh() для volatile-полей."""
+    """Статичный fingerprint + .fresh() для volatile-полей."""
+
     def __init__(self, rnd: random.Random | None = None):
         rnd = rnd or random.Random(uuid.uuid4().int)
-        self.static_headers = _build_static_headers(rnd)
-        self.static_params  = _build_static_params(rnd)
+        self._static_headers = _build_static_headers(rnd)
+        self._static_params  = _build_static_params(rnd)
 
     def fresh(self) -> Tuple[Dict[str, str], Dict[str, str]]:
-        h, p = self.static_headers.copy(), self.static_params.copy()
+        h = self._static_headers.copy()
+        p = self._static_params.copy()
         h["baggage"]      = _build_baggage()
         h["sentry-trace"] = _build_trace()
         p["fp_did"]       = hashlib.md5(_uid().encode()).hexdigest()
         return h, p
 
-# ────────────────── кеш «личностей» по proxy-IP ────────────────────
+# ─────────────────── cache: proxy-ip → Identity ────────────────────
 PROXY_IDENTITIES: Dict[str, Identity] = {}
+
 
 def init_proxies(proxy_list: List[str] | None = None) -> None:
     """
-    На каждый proxy-IP создаём одну Identity с детерминированным сидом
-    f\"{proxy}-0\" — чтобы UA совпадал с push_cookie_tasks / test_cap.
+    Создаёт по одной Identity на каждый proxy-IP.
+    seed = f"{proxy}-0" — детерминированно, чтобы UA совпадал с push_cookie_tasks.
     """
     if not proxy_list:
         proxy_list = ["local"]
@@ -151,6 +166,7 @@ def init_proxies(proxy_list: List[str] | None = None) -> None:
         p: Identity(random.Random(f"{p}-0")) for p in proxy_list
     }
 
-def pick_headers_params(proxy: str, _: int = 0) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """Возвращает (headers, params) «личности» этого proxy — без ротации."""
+
+def pick_headers_params(proxy: str, _=0) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Возвращает (headers, params) «личности» данного proxy."""
     return PROXY_IDENTITIES[proxy].fresh()
