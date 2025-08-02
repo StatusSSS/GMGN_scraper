@@ -11,7 +11,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.remote.webdriver import WebDriver
-
+import random
 from src.sdk.queues.redis_connect import get_redis_sync as get_redis
 
 
@@ -21,7 +21,7 @@ FLAG_QUEUES: Dict[str, str] = {
     "Meteora":  os.getenv("METEORA_QUEUE", "meteora_queue"),
 }
 RESET_TOKENS_QUEUE = os.getenv("RESET_TOKENS_QUEUE", "0") == "1"
-
+PROXY_FILE = Path("src/scraper/dexscreener/proxies.txt")
 sys.stdout.reconfigure(line_buffering=True)  # принудительно выводим логи сразу
 
 
@@ -39,16 +39,35 @@ def push_tokens(tokens: List[str], queue: str) -> None:
     rds.rpush(queue, *tokens)
     print(f"🚚  Отправили {len(tokens)} токенов → {queue}")
 
-
+def _pick_random_proxy() -> str | None:
+    """
+    Возвращает строку ip:port из файла, либо None,
+    если файла нет / список пустой.
+    """
+    if not PROXY_FILE.exists():
+        print("[warn] proxies.txt not found – работаем без прокси")
+        return None
+    proxies = [ln.strip() for ln in PROXY_FILE.read_text().splitlines() if ln.strip()]
+    if not proxies:
+        print("[warn] proxies.txt empty – работаем без прокси")
+        return None
+    return random.choice(proxies)
 
 def _get_driver() -> WebDriver:
     grid_url = os.getenv("SELENIUM_SERVER_URL", "http://localhost:4444/wd/hub")
+
     opts = webdriver.ChromeOptions()
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-extensions")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--disable-infobars")
+
+    # ─── прокси ───
+    if (proxy := _pick_random_proxy()):
+        opts.add_argument(f"--proxy-server=http://{proxy}")
+        print(f"[proxy] use {proxy}")
+
     return webdriver.Remote(command_executor=grid_url, options=opts)
 
 
