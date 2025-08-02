@@ -34,7 +34,7 @@ if not proxies:
 r.delete("cookie_tasks")          # очистка очереди
 
 for p in proxies:                 # p уже вида ip:port
-    ua = Identity(random.Random(f"{p}-0")).static_headers["User-Agent"]
+    ua = Identity(random.Random(f"{p}-0")).fresh()[0]["User-Agent"]
     r.rpush("cookie_tasks", json.dumps({"proxy": p, "ua": ua}))
 
 print(f"Pushed {len(proxies)} tasks → cookie_tasks")
