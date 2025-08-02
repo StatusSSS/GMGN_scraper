@@ -73,18 +73,15 @@ services:
       redis:
         condition: service_started
 
-  # ───────────────── test_cap (получает cookies) ─────────────────
   test_cap:
     build:
       context: .
-      dockerfile: ./Dockerfiles/Dockerfile.test_cap
-    # CMD берётся из Dockerfile.test_cap (python -m src.test_cap)
+      dockerfile: Dockerfiles/Dockerfile.test_cap   # упрощённый Dockerfile
     environment:
       - SELENIUM_SERVER_URL=http://selenium_testcap:4444/wd/hub
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - WAIT_FOR_CLICK=600          # при желании уменьшите
-    volumes: ["./cookies:/app/cookies"]
+      - WAIT_FOR_CLICK=60
     depends_on:
       selenium_testcap:
         condition: service_healthy
