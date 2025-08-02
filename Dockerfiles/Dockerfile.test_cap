@@ -9,4 +9,4 @@ WORKDIR /src
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
-ENTRYPOINT ["python", "-m", "src.test_cap"]   # ← tinyproxy больше не запускаем
+CMD ["python", "-m", "src.test_cap"]
