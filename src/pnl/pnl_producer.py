@@ -42,7 +42,7 @@ DELAY_SEC     = int(os.getenv("DELAY_SEC", "0"))
 OUT_DIR       = os.getenv("OUT_DIR", "reports")
 
 # ▸ размер одной пачки, отправляемой в Redis
-BATCH_SIZE    = int(os.getenv("WALLET_BATCH", "20000"))
+BATCH_SIZE    = int(os.getenv("WALLET_BATCH", "1000"))
 
 FETCHERS: Dict[str, Callable[[str], List[Dict]]] = {
     "PumpSwap": fetch_pumpswap_pnl,
@@ -104,6 +104,8 @@ def consume_tokens_once() -> None:
 
         try:
             rows = fetcher(token)
+            push_wallets_to_redis(rows, token=token, src_flag=src_flag)
+            print(f"📤  Отправили {len(rows)} кошельков мгновенно")
         except Exception as e:
             print(f"⚠️  Ошибка при обработке токена {token}: {e}")
             continue
