@@ -27,9 +27,9 @@ r = redis.Redis(
 )
 
 # ─── список прокси (ip:port) ────────────────────────────────────────
-proxies = load_lines("src/scraper/gmgn/proxies.txt")
+proxies = load_lines("src/scraper/gmgn/proxies_cap.txt")
 if not proxies:
-    raise SystemExit("proxies.txt пуст или не найден")
+    raise SystemExit("proxies_cap.txt пуст или не найден")
 
 r.delete("cookie_tasks")          # очистка очереди
 

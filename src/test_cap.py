@@ -9,7 +9,7 @@ SELENIUM_URL = os.getenv("SELENIUM_SERVER_URL",
                          "http://selenium_testcap:4444/wd/hub")
 
 API_URL        = "https://gmgn.ai/new-pair"
-WAIT_FOR_CLICK = int(os.getenv("WAIT_FOR_CLICK", 60))
+WAIT_FOR_CLICK = int(os.getenv("WAIT_FOR_CLICK", 30))
 
 rds = redis.Redis(REDIS_HOST, REDIS_PORT, decode_responses=True)
 sys.stdout.reconfigure(line_buffering=True)

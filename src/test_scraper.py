@@ -435,11 +435,11 @@ async def redis_loop(proxies: List[str]) -> None:
 
 def main() -> None:
     here = os.path.dirname(__file__)
-    proxies_file = os.path.join(here, "proxies.txt")
+    proxies_file = os.path.join(here, "proxies_cap.txt")
 
     proxies = load_lines(proxies_file)
     if not proxies:
-        logger.warning("proxies.txt missing or empty")
+        logger.warning("proxies_cap.txt missing or empty")
         return
 
     while True:

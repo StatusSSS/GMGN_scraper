@@ -57,6 +57,7 @@ rds_sync: redis_sync.Redis = redis_sync.Redis(
 )
 
 # ───────────────────────── helpers ──────────────────────────────────
+
 def human_pause() -> float:
     delay = random.expovariate(1 / AVG_DELAY)
     if random.random() < 0.02:
@@ -99,6 +100,7 @@ def mark_failed_wallet(wallet: str) -> None:
         logger.error("Cannot write to {}: {}", FAIL_WALLETS_FILE, exc)
 
 # ─────────────────── redis-session helpers ───────────────────────────
+
 def _session_key(proxy: str) -> str:
     return f"cookies:{proxy}"
 
@@ -110,10 +112,9 @@ def load_session(proxy: str) -> Tuple[str, str]:
         if raw:
             payload = json.loads(raw)
             ua = payload["ua"]
-            cookie_hdr = "; ".join(f"{c['name']}={c['value']}"
-                                   for c in payload["cookies"])
+            cookie_hdr = "; ".join(f"{c['name']}={c['value']}" for c in payload["cookies"])
             return ua, cookie_hdr
-        logger.info("[session] cookies for %s not ready → sleep %ss", proxy, WAIT_COOKIES_SEC)
+        logger.info("[session] cookies for {} not ready → sleep {}s", proxy, WAIT_COOKIES_SEC)
         time.sleep(WAIT_COOKIES_SEC)
 
 
@@ -121,9 +122,10 @@ def invalidate_session(proxy: str, ua: str):
     """Удаляем куки и ставим задачу на повторное получение."""
     rds_sync.delete(_session_key(proxy))
     rds_sync.rpush(COOKIE_TASKS_Q, json.dumps({"proxy": proxy, "ua": ua}))
-    logger.warning("[session] invalidated cookies for %s → task re-queued", proxy)
+    logger.warning("[session] invalidated cookies for {} → task re-queued", proxy)
 
 # ───────────────────────── DB save ───────────────────────────────────
+
 @with_db_session
 async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session):
     if pnl_value <= 0.6:
@@ -132,11 +134,12 @@ async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session
     db_session.add(snapshot)
     try:
         await db_session.flush()
-        logger.success("Snapshot saved for %s (PnL %.3f)", wallet, pnl_value)
+        logger.success("Snapshot saved for {} (PnL {:.3f})", wallet, pnl_value)
     except IntegrityError:
         await db_session.rollback()
 
 # ────────────────── HTTP request (sync, thread) ──────────────────────
+
 def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     proxy_str = WORKER_PROXIES[worker_id]
 
@@ -180,7 +183,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
 
         except Exception as e:
             logger.error(
-                "[%s|%s] attempt %d via %s → %s: %s",
+                "[{}|{}] attempt {} via {} → {}: {}",
                 worker_id, wallet[:6], attempt, proxy_str,
                 type(e).__name__, e,
             )
@@ -189,6 +192,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     return None
 
 # ───────────────────────── worker helpers ────────────────────────────
+
 async def process_wallet(worker_id: int, wallet: str) -> None:
     loop = asyncio.get_running_loop()
     data = await asyncio.wait_for(
@@ -198,18 +202,19 @@ async def process_wallet(worker_id: int, wallet: str) -> None:
 
     if data is None:
         mark_failed_wallet(wallet)
-        logger.warning("%s… failed after %d retries", wallet[:6], MAX_RETRIES)
+        logger.warning("{}… failed after {} retries", wallet[:6], MAX_RETRIES)
         return
 
     pnl_value = data.get("data", {}).get("pnl")
     if pnl_value is None:
-        logger.error("[%s] Unexpected payload: %s", wallet[:6], data)
+        logger.error("[{}] Unexpected payload: {}", wallet[:6], data)
         return
 
-    logger.info("[worker %d] %s… PnL %.3f", worker_id, wallet[:6], pnl_value)
+    logger.info("[worker {}] {}… PnL {:.3f}", worker_id, wallet[:6], pnl_value)
     await save_snapshot_if_positive(wallet, pnl_value)
 
 # ───────────────────────── worker coroutine ──────────────────────────
+
 async def worker_chunk(
     worker_id: int,
     wallets: List[str],
@@ -219,7 +224,7 @@ async def worker_chunk(
     processed: List[int],
 ) -> None:
     logger.info(
-        "[worker %d] start token %s wallets=%d proxy %s",
+        "[worker {}] start token {} wallets={} proxy {}",
         worker_id, token, len(wallets), WORKER_PROXIES[worker_id]
     )
 
@@ -229,50 +234,53 @@ async def worker_chunk(
         try:
             await process_wallet(worker_id, w)
         except Exception as e:
-            logger.exception("[worker %d] unhandled on wallet %s: %s", worker_id, w, e)
+            logger.exception("[worker {}] unhandled on wallet {}: {}", worker_id, w, e)
 
         processed[0] += 1
         done = processed[0]
         if done % PROGRESS_EVERY == 0 or done == total:
-            logger.info("[%s] progress %d / %d", token, done, total)
+            logger.info("[{}] progress {} / {}", token, done, total)
 
         LAST_BEAT[worker_id] = time.time()
         await async_sleep_random()
 
     logger.info(
-        "[worker %d] finished token %s (%d wallets)",
+        "[worker {}] finished token {} ({} wallets)",
         worker_id, token, len(wallets)
     )
 
 # ─────────────────────── watchdog & heartbeat ────────────────────────
+
 async def watchdog():
     while True:
         now = time.time()
         for wid, ts in list(LAST_BEAT.items()):
             if now - ts > 300:
-                logger.error("[WATCHDOG] worker %d frozen? last beat %.0fs ago", wid, now - ts)
+                logger.error("[WATCHDOG] worker {} frozen? last beat {:.0f}s ago", wid, now - ts)
         await asyncio.sleep(60)
+
 
 async def heartbeat():
     while True:
         logger.info(
-            "[♥] tasks=%d in_use=%d readyIP=%d cooling=%d",
+            "[♥] tasks={} in_use={} readyIP={} cooling={}",
             len(asyncio.all_tasks()),
             len(PM.in_use), len(PM.ready), len(PM.cooling)
         )
         await asyncio.sleep(30)
 
 # ───────────────────────── batch handler ─────────────────────────────
+
 async def handle_batch(wallets: List[str], *, token: str, src: str):
     total = len(wallets)
-    logger.success("➡️  batch start token=%s src=%s wallets=%d", token, src, total)
+    logger.success("➡️  batch start token={} src={} wallets={}", token, src, total)
 
     if not fp.PROXY_IDENTITIES:
         fp.init_proxies(PM.ready)
 
     n = min(MAX_WORKERS, len(PM.ready), total)
     if n == 0:
-        logger.warning("No proxies or wallets (token=%s)", token)
+        logger.warning("No proxies or wallets (token={})", token)
         return
 
     initial = [PM.acquire() for _ in range(n)]
@@ -293,19 +301,20 @@ async def handle_batch(wallets: List[str], *, token: str, src: str):
     ] + [asyncio.create_task(watchdog()), asyncio.create_task(heartbeat())]
 
     await asyncio.gather(*tasks, return_exceptions=True)
-    logger.success("✅ batch finished token=%s wallets=%d", token, total)
+    logger.success("✅ batch finished token={} wallets={}", token, total)
 
 # ───────────────────────── Redis loop ────────────────────────────────
+
 async def redis_loop() -> None:
     rds: aioredis.Redis = get_redis()
-    logger.success("Worker started, queue '%s'", QUEUE_NAME)
+    logger.success("Worker started, queue '{}'", QUEUE_NAME)
 
     while True:
         try:
             _key, payload = await rds.blpop(QUEUE_NAME)
             raw = json.loads(payload)
 
-            if isinstance(raw, dict):
+            if isinstance(raw, Dict):
                 wallets = raw.get("wallets", [])
                 token   = raw.get("token", "unknown")
                 src     = raw.get("src",   "unknown")
@@ -314,16 +323,17 @@ async def redis_loop() -> None:
                 token = src = "legacy"
 
             if not isinstance(wallets, list):
-                logger.error("Malformed message: %s", raw)
+                logger.error("Malformed message: {}", raw)
                 continue
 
             await handle_batch(wallets, token=token, src=src)
 
         except Exception as exc:
-            logger.exception("redis_loop error: %s", exc)
+            logger.exception("redis_loop error: {}", exc)
             await asyncio.sleep(3)
 
 # ─────────────────────────── Entrypoint ──────────────────────────────
+
 def main() -> None:
     global PM
 
@@ -332,7 +342,7 @@ def main() -> None:
     if not proxies:
         logger.warning("proxies.txt missing or empty")
         return
-    logger.success("Loaded %d proxies", len(proxies))
+    logger.success("Loaded {} proxies", len(proxies))
 
     PM = ProxyManager(proxies, cool_down_sec=COOL_DOWN_SEC)
 
@@ -343,10 +353,9 @@ def main() -> None:
             logger.info("Stopped by Ctrl-C")
             break
         except Exception as exc:
-            logger.exception("sync_scraper crash: %s — restart in 5s", exc)
+            logger.exception("sync_scraper crash: {} — restart in 5s", exc)
             time.sleep(5)
+
 
 if __name__ == "__main__":
     main()
-
-

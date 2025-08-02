@@ -267,11 +267,11 @@ async def redis_loop(proxies: List[str]) -> None:
 
 def main() -> None:
     here         = os.path.dirname(__file__)
-    proxies_file = os.path.join(here, "proxies.txt")
+    proxies_file = os.path.join(here, "proxies_cap.txt")
 
     proxies = load_lines(proxies_file)
     if not proxies:
-        print("⚠️  Файл proxies.txt пуст или не найден")
+        print("⚠️  Файл proxies_cap.txt пуст или не найден")
         return
 
     try:

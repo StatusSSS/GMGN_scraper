@@ -21,7 +21,7 @@
 #     "Meteora":  os.getenv("METEORA_QUEUE", "meteora_queue"),
 # }
 # RESET_TOKENS_QUEUE = os.getenv("RESET_TOKENS_QUEUE", "0") == "1"
-# PROXY_FILE = Path("src/scraper/dexscreener/proxies.txt")
+# PROXY_FILE = Path("src/scraper/dexscreener/proxies_cap.txt")
 # sys.stdout.reconfigure(line_buffering=True)  # принудительно выводим логи сразу
 #
 #
@@ -45,11 +45,11 @@
 #     если файла нет / список пустой.
 #     """
 #     if not PROXY_FILE.exists():
-#         print("[warn] proxies.txt not found – работаем без прокси")
+#         print("[warn] proxies_cap.txt not found – работаем без прокси")
 #         return None
 #     proxies = [ln.strip() for ln in PROXY_FILE.read_text().splitlines() if ln.strip()]
 #     if not proxies:
-#         print("[warn] proxies.txt empty – работаем без прокси")
+#         print("[warn] proxies_cap.txt empty – работаем без прокси")
 #         return None
 #     return random.choice(proxies)
 #

@@ -81,7 +81,7 @@ services:
       - SELENIUM_SERVER_URL=http://selenium_testcap:4444/wd/hub
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - WAIT_FOR_CLICK=60
+      - WAIT_FOR_CLICK=30
     depends_on:
       selenium_testcap:
         condition: service_healthy
