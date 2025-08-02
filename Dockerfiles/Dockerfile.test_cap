@@ -1,26 +1,12 @@
-# Dockerfiles/Dockerfile.test_cap
 FROM python:3.11-slim
 
-# ─── системные пакеты ────────────────────────────────────────────────
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends tinyproxy && \
-    rm -rf /var/lib/apt/lists/*
-
-# ─── базовый конфиг tinyproxy (без Upstream) ─────────────────────────
-RUN printf 'Port 8888\nListen 0.0.0.0\nMaxClients 50\n' \
-      > /etc/tinyproxy/tinyproxy.conf
-
-# ─── Python-зависимости ──────────────────────────────────────────────
+# ─── Python-зависимости ─────────────────────────────────────────────
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# ─── копируем исходники и entrypoint ────────────────────────────────
+# ─── копируем исходники ─────────────────────────────────────────────
 WORKDIR /src
 COPY . .
 
-COPY Dockerfiles/entrypoint_testcap.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
 ENV PYTHONUNBUFFERED=1
-
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["python", "-m", "src.test_cap"]   # ← tinyproxy больше не запускаем
