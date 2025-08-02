@@ -24,7 +24,7 @@ SELENIUM_URL = os.getenv(
 )
 
 API_URL = "https://gmgn.ai/new-pair"          # страница, где появляется капча
-WAIT_FOR_CLICK = int(os.getenv("WAIT_FOR_CLICK", 20))   # секунд ждать оператора
+WAIT_FOR_CLICK = int(os.getenv("WAIT_FOR_CLICK", 30))   # секунд ждать оператора
 
 # ─── Redis ───────────────────────────────────────────────────────────
 rds = redis.Redis(REDIS_HOST, REDIS_PORT, decode_responses=True)
