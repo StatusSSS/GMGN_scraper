@@ -84,10 +84,11 @@ def log_http_error(e: HTTPError, wallet: str, attempt: int, proxy: str) -> None:
     if len(resp.text or "") > SHOW_BODY:
         snippet += "…"
     logger.error(
-        "[{}] attempt {} via {} → HTTP {} {} | {}",
-        wallet, attempt, proxy, resp.status_code, resp.reason, snippet,
+        "[{}] {} via {} → {} {} | body={} | headers={}",
+        wallet, attempt, proxy, resp.status_code, resp.reason,
+        (resp.text or "")[:200],
+        {k: resp.headers.get(k) for k in ("cf-ray", "cf-cache-status", "retry-after")},
     )
-
 
 def mark_failed_wallet(wallet: str) -> None:
     try:
@@ -113,6 +114,7 @@ def load_session(proxy: str) -> Tuple[str, str]:
             payload = json.loads(raw)
             ua = payload["ua"]
             cookie_hdr = "; ".join(f"{c['name']}={c['value']}" for c in payload["cookies"])
+            logger.debug("[LOAD] {} ua={} cookies={}", proxy, ua[:30], cookie_hdr[:120])
             return ua, cookie_hdr
         logger.info("[session] cookies for {} not ready → sleep {}s", proxy, WAIT_COOKIES_SEC)
         time.sleep(WAIT_COOKIES_SEC)

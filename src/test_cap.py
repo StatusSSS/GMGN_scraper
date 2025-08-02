@@ -55,13 +55,12 @@ def build_opts(proxy: str, ua: str) -> Options:
     return opts
 
 
-def save_cookies(proxy: str, ua: str, driver) -> None:
-    """Сохраняет cookies в Redis под ключом cookies:<full-proxy>."""
-    rds.set(
-        f"cookies:{proxy}",
-        json.dumps({"ua": ua, "cookies": driver.get_cookies()}),
-    )
-    print(f"[OK] cookies saved → cookies:{proxy}")
+def save_cookies(proxy: str, ua: str, driver):
+    payload = {"ua": ua, "cookies": driver.get_cookies()}
+    rds.set(f"cookies:{proxy}", json.dumps(payload))
+    # 👇 добавьте подробный лог
+    print(f"[SAVE] {proxy} ua={ua[:30]}… "
+          f"{[c['name'] for c in payload['cookies']]}")
 
 
 # ─── основной цикл ───────────────────────────────────────────────────
