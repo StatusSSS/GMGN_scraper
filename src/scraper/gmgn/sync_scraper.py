@@ -1,16 +1,19 @@
 from __future__ import annotations
-
 """
 Обновлённая версия sync_scraper.py
 • По умолчанию работает один воркер (MAX_WORKERS = env("GMGN_WORKERS", 1))
-• Добавлено подробное логирование соответствия UA ↔ cookies.
-    - Логируется, какие куки и UA применяются для каждого proxy.
-    - Проверяется совпадение UA, сохранённого вместе с cookies, и UA, 
-      генерируемого fingerprints.pick_headers_params(). При расхождении
-      выводится предупреждение [UA MISMATCH].
+• Добавлено подробное логирование соответствия UA ↔ cookies:
+    - показываем UA и список имён куков, которыми реально пользуется запрос;
+    - предупреждаем, если UA из fingerprints не совпадает с тем, через который
+      куки были получены test_cap.py (метка [UA MISMATCH]).
 """
 
-import asyncio, json, os, random, threading, time
+import asyncio
+import json
+import os
+import random
+import threading
+import time
 from typing import Dict, List, Optional, Tuple
 
 import redis.asyncio as aioredis
@@ -39,13 +42,13 @@ COOKIE_TASKS_Q   = os.getenv("COOKIE_TASKS", "cookie_tasks")
 API_PERIOD       = os.getenv("GMGN_PERIOD", "7d")
 API_TIMEOUT      = int(os.getenv("GMGN_TIMEOUT", "30"))
 MAX_RETRIES      = int(os.getenv("GMGN_RETRIES", "20"))
-# ↓ По умолчанию 1 воркер, можно переопределить переменной GMGN_WORKERS
+# ↓ По умолчанию 1 воркер; можно переопределить GMGN_WORKERS
 MAX_WORKERS      = int(os.getenv("GMGN_WORKERS", "1"))
 SHOW_BODY        = int(os.getenv("GMGN_SHOW_BODY", "300"))
 AVG_DELAY        = float(os.getenv("AVG_DELAY", "5"))
 PROGRESS_EVERY   = int(os.getenv("PROGRESS_EVERY", "100"))
 
-COOL_DOWN_SEC    = 30 * 60        # оставлен для совместимости
+COOL_DOWN_SEC    = 30 * 60        # как было, 30 мин «охлаждение» IP
 WAIT_COOKIES_SEC = 10
 
 BAD_STATUSES = {403, 429, 500, 502, 503, 504}
@@ -66,11 +69,11 @@ rds_sync: redis_sync.Redis = redis_sync.Redis(
 )
 
 # ───────────────────────── helpers ──────────────────────────────────
-
 def human_pause() -> float:
+    """Экспоненциальная пауза, имитирующая случайные задержки человека."""
     delay = random.expovariate(1 / AVG_DELAY)
     if random.random() < 0.02:
-        delay += random.uniform(30, 90)
+        delay += random.uniform(30, 90)  # иногда залипаем надолго
     return delay
 
 
@@ -95,7 +98,7 @@ def log_http_error(e: HTTPError, wallet: str, attempt: int, proxy: str) -> None:
     logger.error(
         "[{}] {} via {} → {} {} | body={} | headers={}",
         wallet, attempt, proxy, resp.status_code, resp.reason,
-        (resp.text or "")[:200],
+        snippet,
         {k: resp.headers.get(k) for k in ("cf-ray", "cf-cache-status", "retry-after")},
     )
 
@@ -111,7 +114,6 @@ def mark_failed_wallet(wallet: str) -> None:
         logger.error("Cannot write to {}: {}", FAIL_WALLETS_FILE, exc)
 
 # ─────────────────── redis-session helpers ───────────────────────────
-
 def _session_key(proxy: str) -> str:
     return f"cookies:{proxy}"
 
@@ -124,7 +126,7 @@ def load_session(proxy: str) -> Tuple[str, str]:
             payload = json.loads(raw)
             ua = payload["ua"]
             cookie_hdr = "; ".join(f"{c['name']}={c['value']}" for c in payload["cookies"])
-            logger.debug("[LOAD] {} ua={} cookies={}", proxy, ua[:30], cookie_hdr[:120])
+            logger.debug("[LOAD] {} ua={} cookies={}", proxy, ua[:40], cookie_hdr[:120])
             return ua, cookie_hdr
         logger.info("[session] cookies for {} not ready → sleep {}s", proxy, WAIT_COOKIES_SEC)
         time.sleep(WAIT_COOKIES_SEC)
@@ -137,10 +139,9 @@ def invalidate_session(proxy: str, ua: str):
     logger.warning("[session] invalidated cookies for {} → task re-queued", proxy)
 
 # ───────────────────────── DB save ───────────────────────────────────
-
 @with_db_session
 async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session):
-    if pnl_value <= 0.6:
+    if pnl_value <= 0.6:      # храним только «плюсовые» кошельки
         return
     snapshot = Wallet(address=wallet, pnl=round(pnl_value, 3))
     db_session.add(snapshot)
@@ -151,7 +152,6 @@ async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session
         await db_session.rollback()
 
 # ────────────────── HTTP request (sync, thread) ──────────────────────
-
 def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     proxy_str = WORKER_PROXIES[worker_id]
 
@@ -173,7 +173,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
         "[UA/COOKIES] proxy {} ua={}… cookies={}",
         proxy_str,
         ua[:80],
-        ", ".join(c.split("=")[0] for c in cookie_hdr.split("; ")),
+        ", ".join(c.split('=')[0] for c in cookie_hdr.split("; ")),
     )
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -223,7 +223,6 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     return None
 
 # ───────────────────────── worker helpers ────────────────────────────
-
 async def process_wallet(worker_id: int, wallet: str) -> None:
     loop = asyncio.get_running_loop()
     data = await asyncio.wait_for(
@@ -245,7 +244,6 @@ async def process_wallet(worker_id: int, wallet: str) -> None:
     await save_snapshot_if_positive(wallet, pnl_value)
 
 # ───────────────────────── worker coroutine ──────────────────────────
-
 async def worker_chunk(
     worker_id: int,
     wallets: List[str],
@@ -281,7 +279,6 @@ async def worker_chunk(
     )
 
 # ─────────────────────── watchdog & heartbeat ────────────────────────
-
 async def watchdog():
     while True:
         now = time.time()
@@ -294,14 +291,13 @@ async def watchdog():
 async def heartbeat():
     while True:
         logger.info(
-            "[♥] tasks={} in_use={} readyIP={} cooling={}",
+            "[♥] tasks={} in_use={} readyIP={} cooling{}",
             len(asyncio.all_tasks()),
             len(PM.in_use), len(PM.ready), len(PM.cooling)
         )
         await asyncio.sleep(30)
 
 # ───────────────────────── batch handler ─────────────────────────────
-
 async def handle_batch(wallets: List[str], *, token: str, src: str):
     total = len(wallets)
     logger.success("➡️  batch start token={} src={} wallets={}", token, src, total)
@@ -335,7 +331,6 @@ async def handle_batch(wallets: List[str], *, token: str, src: str):
     logger.success("✅ batch finished token={} wallets={}", token, total)
 
 # ───────────────────────── Redis loop ────────────────────────────────
-
 async def redis_loop() -> None:
     rds: aioredis.Redis = get_redis()
     logger.success("Worker started, queue '{}'", QUEUE_NAME)
@@ -364,9 +359,28 @@ async def redis_loop() -> None:
             await asyncio.sleep(3)
 
 # ─────────────────────────── Entrypoint ──────────────────────────────
-
 def main() -> None:
     global PM
 
     here = os.path.dirname(__file__)
-    proxies = load_lines(os.path.join(here
+    proxies = load_lines(os.path.join(here, "proxies.txt"))
+    if not proxies:
+        logger.warning("proxies.txt missing or empty")
+        return
+    logger.success("Loaded {} proxies", len(proxies))
+
+    PM = ProxyManager(proxies, cool_down_sec=COOL_DOWN_SEC)
+
+    while True:
+        try:
+            asyncio.run(redis_loop())
+        except KeyboardInterrupt:
+            logger.info("Stopped by Ctrl-C")
+            break
+        except Exception as exc:
+            logger.exception("sync_scraper crash: {} — restart in 5s", exc)
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    main()
