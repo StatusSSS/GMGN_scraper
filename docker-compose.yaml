@@ -100,6 +100,7 @@ services:
       - RESET_QUEUE=1
       - SELENIUM_SERVER_URL=http://selenium_dex:4444/wd/hub
       - GMGN_WORKERS=1
+      - LOG_LEVEL=DEBUG
     volumes: [ "./:/src" ]
     depends_on:
       redis: # подождать, пока контейнер запущен
