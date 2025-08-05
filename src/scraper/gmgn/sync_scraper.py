@@ -119,16 +119,31 @@ def _session_key(proxy: str) -> str:
 
 
 def load_session(proxy: str) -> Tuple[str, str]:
-    """Блокируется, пока в Redis не появятся cookies для proxy."""
     while True:
         raw = rds_sync.get(_session_key(proxy))
         if raw:
             payload = json.loads(raw)
             ua = payload["ua"]
-            cookie_hdr = "; ".join(f"{c['name']}={c['value']}" for c in payload["cookies"])
-            logger.debug("[LOAD] {} ua={} cookies={}", proxy, ua[:40], cookie_hdr[:120])
+
+
+            allowed = [
+                c for c in payload["cookies"]
+                if c["name"] != "__cf_bm"
+            ]
+            cookie_hdr = "; ".join(
+                f"{c['name']}={c['value']}" for c in allowed
+            )
+
+            logger.debug(
+                "[LOAD] {} ua={} cookies={}",
+                proxy, ua[:40], cookie_hdr[:120]
+            )
             return ua, cookie_hdr
-        logger.info("[session] cookies for {} not ready → sleep {}s", proxy, WAIT_COOKIES_SEC)
+
+        logger.info(
+            "[session] cookies for {} not ready → sleep {}s",
+            proxy, WAIT_COOKIES_SEC
+        )
         time.sleep(WAIT_COOKIES_SEC)
 
 
@@ -358,7 +373,7 @@ async def redis_loop() -> None:
             logger.exception("redis_loop error: {}", exc)
             await asyncio.sleep(3)
 
-# ─────────────────────────── Entrypoint ──────────────────────────────
+
 def main() -> None:
     global PM
 
