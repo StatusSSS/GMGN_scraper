@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+"""
+Обновлённая версия sync_scraper.py
+• По умолчанию работает один воркер (MAX_WORKERS = env("GMGN_WORKERS", 1))
+• Добавлено подробное логирование соответствия UA ↔ cookies.
+    - Логируется, какие куки и UA применяются для каждого proxy.
+    - Проверяется совпадение UA, сохранённого вместе с cookies, и UA, 
+      генерируемого fingerprints.pick_headers_params(). При расхождении
+      выводится предупреждение [UA MISMATCH].
+"""
+
 import asyncio, json, os, random, threading, time
-from typing import Dict, List, Optional, Tuple          # Tuple всё-таки нужен
+from typing import Dict, List, Optional, Tuple
 
 import redis.asyncio as aioredis
 import redis as redis_sync
@@ -10,13 +20,11 @@ from curl_cffi.requests.exceptions import HTTPError
 from dotenv import load_dotenv
 from sqlalchemy.exc import IntegrityError
 
-# ─── internal SDK ────────────────────────────────────────────────────
 from src.sdk.infrastructure.logger import logger
 from src.sdk.databases.postgres.dependency import with_db_session
 from src.sdk.databases.postgres.models import Wallet
-from src.sdk.queues.redis_connect import get_redis          # async redis
+from src.sdk.queues.redis_connect import get_redis
 
-# ─── gmgn helpers ────────────────────────────────────────────────────
 from src.scraper.gmgn import fingerprints as fp
 from src.scraper.gmgn.proxy_manager import ProxyManager
 
@@ -31,7 +39,8 @@ COOKIE_TASKS_Q   = os.getenv("COOKIE_TASKS", "cookie_tasks")
 API_PERIOD       = os.getenv("GMGN_PERIOD", "7d")
 API_TIMEOUT      = int(os.getenv("GMGN_TIMEOUT", "30"))
 MAX_RETRIES      = int(os.getenv("GMGN_RETRIES", "20"))
-MAX_WORKERS      = int(os.getenv("GMGN_WORKERS", "5"))
+# ↓ По умолчанию 1 воркер, можно переопределить переменной GMGN_WORKERS
+MAX_WORKERS      = int(os.getenv("GMGN_WORKERS", "1"))
 SHOW_BODY        = int(os.getenv("GMGN_SHOW_BODY", "300"))
 AVG_DELAY        = float(os.getenv("AVG_DELAY", "5"))
 PROGRESS_EVERY   = int(os.getenv("PROGRESS_EVERY", "100"))
@@ -89,6 +98,7 @@ def log_http_error(e: HTTPError, wallet: str, attempt: int, proxy: str) -> None:
         (resp.text or "")[:200],
         {k: resp.headers.get(k) for k in ("cf-ray", "cf-cache-status", "retry-after")},
     )
+
 
 def mark_failed_wallet(wallet: str) -> None:
     try:
@@ -158,12 +168,31 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     with UA_COOKIES_LOCK:
         ua, cookie_hdr = UA_COOKIES[proxy_str]
 
+    # ——— DEBUG UA & cookies для текущего proxy ———
+    logger.debug(
+        "[UA/COOKIES] proxy {} ua={}… cookies={}",
+        proxy_str,
+        ua[:80],
+        ", ".join(c.split("=")[0] for c in cookie_hdr.split("; ")),
+    )
+
     for attempt in range(1, MAX_RETRIES + 1):
         headers, params = fp.pick_headers_params(proxy_str, 0)
         headers.update({
             "Cookie":  cookie_hdr,
             "Referer": f"https://gmgn.ai/sol/address/{wallet}",
         })
+
+        # Проверяем совпадение UA (fingerprint) и UA, с которым куки сохранялись
+        if headers.get("User-Agent") != ua:
+            logger.warning(
+                "[UA MISMATCH] proxy {} cookie-UA={}… header-UA={}…",
+                proxy_str,
+                ua[:60],
+                headers.get("User-Agent", "")[:60],
+            )
+        else:
+            logger.debug("[UA OK] proxy {}", proxy_str)
 
         try:
             resp = curl.get(
@@ -340,24 +369,4 @@ def main() -> None:
     global PM
 
     here = os.path.dirname(__file__)
-    proxies = load_lines(os.path.join(here, "proxies.txt"))
-    if not proxies:
-        logger.warning("proxies.txt missing or empty")
-        return
-    logger.success("Loaded {} proxies", len(proxies))
-
-    PM = ProxyManager(proxies, cool_down_sec=COOL_DOWN_SEC)
-
-    while True:
-        try:
-            asyncio.run(redis_loop())
-        except KeyboardInterrupt:
-            logger.info("Stopped by Ctrl-C")
-            break
-        except Exception as exc:
-            logger.exception("sync_scraper crash: {} — restart in 5s", exc)
-            time.sleep(5)
-
-
-if __name__ == "__main__":
-    main()
+    proxies = load_lines(os.path.join(here
