@@ -263,6 +263,8 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
 
 
 async def process_wallet(worker_id: int, wallet: str) -> None:
+    if isinstance(wallet, dict):
+        wallet = wallet.get("signing_wallet") or str(wallet)
     loop = asyncio.get_running_loop()
     data = await asyncio.wait_for(
         loop.run_in_executor(None, fetch_wallet_stat, worker_id, wallet),
