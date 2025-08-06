@@ -15,7 +15,7 @@ import random
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
-
+from urllib.parse import quote
 import redis.asyncio as aioredis
 import redis as redis_sync
 from curl_cffi import requests as curl
@@ -166,6 +166,7 @@ async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session
 def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     proxy_str = WORKER_PROXIES[worker_id]
 
+    # ── helpers ────────────────────────────────────────────────────
     def build_proxy_dict(p: str) -> Dict[str, str]:
         host, port, user, pwd = p.split(":", 3)
         return {
@@ -180,6 +181,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
         except Exception:
             return "n/a"
 
+    # ── pre-calc ───────────────────────────────────────────────────
     proxies_dict = build_proxy_dict(proxy_str)
     url = f"https://gmgn.ai/api/v1/wallet_stat/sol/{wallet}/{API_PERIOD}"
 
@@ -188,18 +190,19 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
 
     logger.debug(
         "[UA/COOKIES] proxy {} ua={}… cookies={}",
-        proxy_str,
-        ua[:80],
-        ", ".join(c.split('=')[0] for c in cookie_hdr.split("; ")),
+        proxy_str, ua[:80],
+        ", ".join(c.split('=')[0] for c in cookie_hdr.split('; '))
     )
     print(proxy_ip(proxies_dict))
+
+    # ── main loop ──────────────────────────────────────────────────
     for attempt in range(1, MAX_RETRIES + 1):
         headers, params = fp.pick_headers_params(proxy_str, 0)
+
+        # base-headers
         headers.update({
             "Cookie":  cookie_hdr,
             "Referer": f"https://gmgn.ai/sol/address/{wallet}",
-
-
             "Origin": "https://gmgn.ai",
             "Sec-Fetch-Site": "same-origin",
             "Sec-Fetch-Mode": "cors",
@@ -207,32 +210,35 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
             "X-Requested-With": "XMLHttpRequest",
         })
 
+        # 1️⃣ UA из cookies ↔ UA в запросе — одинаковый
+        headers["User-Agent"] = ua
+
+        # 2️⃣ /wallet_stat не понимает эти параметры → удаляем
+        for trash in (
+            "limit", "orderby", "direction",
+            "showsmall", "sellout", "tx30d", "period",
+        ):
+            params.pop(trash, None)
+
         logger.debug(
             "[REQ] proxy {} → {} | headers={} | params={}",
             proxy_str, url,
             {k: headers.get(k) for k in (
-                'User-Agent', 'Cookie', 'Origin',
-                'Sec-Fetch-Site', 'Sec-Fetch-Mode',
-                'Sec-Fetch-Dest', 'X-Requested-With'
+                "User-Agent", "Cookie", "Origin",
+                "Sec-Fetch-Site", "Sec-Fetch-Mode",
+                "Sec-Fetch-Dest", "X-Requested-With",
             )},
             params,
         )
-
-
-        if headers.get("User-Agent") != ua:
-            logger.warning(
-                "[UA MISMATCH] proxy {} cookie-UA={}… header-UA={}…",
-                proxy_str,
-                ua[:60],
-                headers.get("User-Agent", "")[:60],
-            )
-        else:
-            logger.debug("[UA OK] proxy {}", proxy_str)
+        logger.debug("[UA OK] proxy {}", proxy_str)
 
         try:
             resp = curl.get(
-                url, params=params, headers=headers,
-                impersonate="chrome120", timeout=API_TIMEOUT,
+                url,
+                params=params,
+                headers=headers,
+                impersonate="chrome120",
+                timeout=API_TIMEOUT,
                 proxies=proxies_dict,
             )
             resp.raise_for_status()
@@ -255,6 +261,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
             )
 
         time.sleep(1.5)
+
     return None
 
 
