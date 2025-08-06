@@ -125,13 +125,9 @@ def load_session(proxy: str) -> Tuple[str, str]:
             payload = json.loads(raw)
             ua = payload["ua"]
 
-
-            allowed = [
-                c for c in payload["cookies"]
-                if c["name"] != "__cf_bm"
-            ]
+            # берём все куки без фильтрации
             cookie_hdr = "; ".join(
-                f"{c['name']}={c['value']}" for c in allowed
+                f"{c['name']}={c['value']}" for c in payload["cookies"]
             )
 
             logger.debug(
