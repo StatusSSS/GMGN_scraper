@@ -15,7 +15,7 @@ import uuid
 from typing import Dict, List, Tuple
 
 # ─────────────────────────── constants ────────────────────────────
-CHROME_MAJOR = 138  # ↳ тот же major, что в curl_cffi impersonate="chrome138"
+CHROME_MAJOR = 120  # ↳ тот же major, что в curl_cffi impersonate="chrome138"
 
 _LANGS = ["ru", "en", "de", "es"]
 _TZS = [
