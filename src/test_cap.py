@@ -20,9 +20,9 @@ REDIS_PORT      = int(os.getenv("REDIS_PORT", 6379))
 SELENIUM_URL    = os.getenv("SELENIUM_SERVER_URL",
                              "http://selenium_testcap:4444/wd/hub")
 
-CAPTCHA_URL     = "https://gmgn.ai/new-pair"      # страница с капчей
-POST_PAGE_URL   = "https://gmgn.ai/sol"           # даёт first-party куки
-WAIT_FOR_CLICK  = int(os.getenv("WAIT_FOR_CLICK", 30))   # сек, пока оператор кликает
+CAPTCHA_URL     = "https://gmgn.ai/new-pair"
+POST_PAGE_URL   = "https://gmgn.ai/sol/address/43DbKtri_Bw3reJNLgGzAksMMtamNvEYCEqm7oio2d5kUQwAAfB9P"
+WAIT_FOR_CLICK  = int(os.getenv("WAIT_FOR_CLICK", 30))
 
 # ─── Redis ───────────────────────────────────────────────────────────
 rds = redis.Redis(REDIS_HOST, REDIS_PORT, decode_responses=True)
@@ -67,13 +67,13 @@ while True:
         # 1️⃣ Страница с капчей
         driver.get(CAPTCHA_URL)
         print(f"⏳  wait click ({WAIT_FOR_CLICK}s)…")
-        time.sleep(WAIT_FOR_CLICK)
+        time.sleep(10)
 
-        # 2️⃣ Заходим на /sol, чтобы JS добавил куки GMGN (sid, GMGN_CHAIN…)
+
         driver.get(POST_PAGE_URL)
-        time.sleep(1.0)            # даём фронту записать куки
+        time.sleep(15)
 
-        # 3️⃣ Сохраняем полный набор
+
         save_cookies(proxy, ua, driver)
 
     except Exception as exc:
