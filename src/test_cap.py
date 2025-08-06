@@ -66,11 +66,7 @@ while True:
         # 1️⃣ Страница с капчей
         driver.get(POST_PAGE_URL)
         print(f"⏳  wait click ({WAIT_FOR_CLICK}s)…")
-        time.sleep(10)
-
-
-        driver.refresh()
-        time.sleep(15)
+        time.sleep(WAIT_FOR_CLICK)
 
 
         save_cookies(proxy, ua, driver)
