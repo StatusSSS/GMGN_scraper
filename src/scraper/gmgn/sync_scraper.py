@@ -229,14 +229,14 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
         # safety-check: все headers — str
         for k, v in headers.items():
             if not isinstance(v, str):
-                logger.error("Header not str: %s = %r", k, v)
+                logger.error("Header not str: {} = {}", k, v)
 
         try:
             resp = curl.get(
                 url,
                 params=params,
                 headers=headers,
-                impersonate="chrome138",      # JA3 ⇆ UA-major = 138
+                impersonate="chrome120",      # JA3 ⇆ UA-major = 138
                 timeout=API_TIMEOUT,
                 proxies=proxies_dict,
             )
