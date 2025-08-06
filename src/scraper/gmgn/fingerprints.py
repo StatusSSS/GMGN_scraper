@@ -57,13 +57,14 @@ def _build_stamp() -> str:
 
 
 def _build_baggage() -> str:
-    return (
-        "sentry-environment=production,"  # static
-        f"sentry-release={_build_stamp()},"  # dynamic
-        "sentry-public_key=93c25bab7246077dc3eb85b59d6e7d40,"  # static
-        f"sentry-trace_id={_uid()},"  # dynamic
-        "sentry-sample_rate=0.005,sentry-sampled=false",
-    )
+    return ",".join([
+        "sentry-environment=production",                     # static
+        f"sentry-release={_build_stamp()}",                  # dynamic
+        "sentry-public_key=93c25bab7246077dc3eb85b59d6e7d40",# static
+        f"sentry-trace_id={_uid()}",                         # dynamic
+        "sentry-sample_rate=0.005",
+        "sentry-sampled=false",
+    ])
 
 
 def _build_trace() -> str:
