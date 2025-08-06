@@ -118,6 +118,7 @@ def _session_key(proxy: str) -> str:
     return f"cookies:{proxy}"
 
 
+
 def load_session(proxy: str) -> Tuple[str, str]:
     while True:
         raw = rds_sync.get(_session_key(proxy))
@@ -125,20 +126,21 @@ def load_session(proxy: str) -> Tuple[str, str]:
             payload = json.loads(raw)
             ua = payload["ua"]
 
-            # берём все куки без фильтрации
+            # куки → строка, все спец-символы кодируем
             cookie_hdr = "; ".join(
-                f"{c['name']}={c['value']}" for c in payload["cookies"]
+                f"{c['name']}={quote(str(c['value']), safe='')}"
+                for c in payload["cookies"]
             )
 
             logger.debug(
                 "[LOAD] {} ua={} cookies={}",
-                proxy, ua[:40], cookie_hdr[:120]
+                proxy, ua[:40], cookie_hdr[:120],
             )
             return ua, cookie_hdr
 
         logger.info(
             "[session] cookies for {} not ready → sleep {}s",
-            proxy, WAIT_COOKIES_SEC
+            proxy, WAIT_COOKIES_SEC,
         )
         time.sleep(WAIT_COOKIES_SEC)
 
@@ -174,12 +176,6 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
             "https": f"http://{user}:{pwd}@{host}:{port}",
         }
 
-    def proxy_ip(proxies):
-        try:
-            r = curl.get("https://api.ipify.org", proxies=proxies, timeout=10)
-            return r.text.strip()
-        except Exception:
-            return "n/a"
 
     # ── pre-calc ───────────────────────────────────────────────────
     proxies_dict = build_proxy_dict(proxy_str)
@@ -193,7 +189,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
         proxy_str, ua[:80],
         ", ".join(c.split('=')[0] for c in cookie_hdr.split('; '))
     )
-    print(proxy_ip(proxies_dict))
+
 
     # ── main loop ──────────────────────────────────────────────────
     for attempt in range(1, MAX_RETRIES + 1):
@@ -231,6 +227,10 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
             params,
         )
         logger.debug("[UA OK] proxy {}", proxy_str)
+
+        for k, v in headers.items():
+            if not isinstance(v, str):
+                logger.error("Header not str: {} = {}", k, v)
 
         try:
             resp = curl.get(
