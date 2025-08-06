@@ -20,7 +20,6 @@ REDIS_PORT      = int(os.getenv("REDIS_PORT", 6379))
 SELENIUM_URL    = os.getenv("SELENIUM_SERVER_URL",
                              "http://selenium_testcap:4444/wd/hub")
 
-CAPTCHA_URL     = "https://gmgn.ai/new-pair"
 POST_PAGE_URL   = "https://gmgn.ai/sol/address/9NQn3TLma9sKd6pbBuXy5we6PMs6QLWAz8awhZyGNgmo"
 WAIT_FOR_CLICK  = int(os.getenv("WAIT_FOR_CLICK", 30))
 
@@ -65,7 +64,7 @@ while True:
     driver = webdriver.Remote(SELENIUM_URL, options=build_opts(proxy, ua))
     try:
         # 1️⃣ Страница с капчей
-        driver.get(CAPTCHA_URL)
+        driver.get(POST_PAGE_URL)
         print(f"⏳  wait click ({WAIT_FOR_CLICK}s)…")
         time.sleep(10)
 
