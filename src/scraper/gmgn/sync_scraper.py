@@ -166,7 +166,7 @@ async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session
     except IntegrityError:
         await db_session.rollback()
 
-# ────────────────── HTTP request (sync, thread) ──────────────────────
+
 def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     proxy_str = WORKER_PROXIES[worker_id]
 
@@ -183,7 +183,6 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     with UA_COOKIES_LOCK:
         ua, cookie_hdr = UA_COOKIES[proxy_str]
 
-    # ——— DEBUG UA & cookies для текущего proxy ———
     logger.debug(
         "[UA/COOKIES] proxy {} ua={}… cookies={}",
         proxy_str,
@@ -196,9 +195,16 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
         headers.update({
             "Cookie":  cookie_hdr,
             "Referer": f"https://gmgn.ai/sol/address/{wallet}",
+
+
+            "Origin": "https://gmgn.ai",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
+            "X-Requested-With": "XMLHttpRequest",
         })
 
-        # Проверяем совпадение UA (fingerprint) и UA, с которым куки сохранялись
+
         if headers.get("User-Agent") != ua:
             logger.warning(
                 "[UA MISMATCH] proxy {} cookie-UA={}… header-UA={}…",
@@ -237,7 +243,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
         time.sleep(1.5)
     return None
 
-# ───────────────────────── worker helpers ────────────────────────────
+
 async def process_wallet(worker_id: int, wallet: str) -> None:
     loop = asyncio.get_running_loop()
     data = await asyncio.wait_for(

@@ -35,38 +35,53 @@ from src.sdk.databases.postgres.models import Wallet, WalletSnapshot            
 
 # ────────────────────────── HTTP consts ───────────────────────────
 GMGN_ENDPOINT = "https://gmgn.ai/api/v1/wallet_holdings/sol/{address}"
-headers = {
-    "sec-ch-ua-full-version-list": "\"Google Chrome\";v=\"137.0.7151.104\", \"Chromium\";v=\"137.0.7151.104\", \"Not/A)Brand\";v=\"24.0.0.0\"",
-    "sec-ch-ua-platform": "\"Windows\"",
-    "Referer": "https://gmgn.ai/sol/address/43DbKtri_9vooJ8FPhM4k7n39JC9NtW2942K1NUtotNjbeCbbC3jF",
-    "sec-ch-ua": "\"Google Chrome\";v=\"137\", \"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
-    "sec-ch-ua-bitness": "\"64\"",
-    "sec-ch-ua-model": "\"\"",
-    "sec-ch-ua-mobile": "?0",
-    "baggage": "sentry-environment=production,sentry-release=20250617-62-c04b007,sentry-public_key=93c25bab7246077dc3eb85b59d6e7d40,sentry-trace_id=4d83c3ec170d4d598ecb8d9293b3647e,sentry-sample_rate=0.005,sentry-sampled=false",
-    "sentry-trace": "461f75434c7d4bb3b80adcb56f4244fe-8e0d7e42f7995574-0",
-    "sec-ch-ua-arch": "\"x86\"",
-    "sec-ch-ua-full-version": "\"137.0.7151.104\"",
-    "Accept": "application/json, text/plain, */*",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-    "sec-ch-ua-platform-version": "\"15.0.0\"",
+
+cookies = {
+    '_ga': 'GA1.1.1261906334.1735592964',
+    'GMGN_CHAIN': 'sol',
+    'GMGN_THEME': 'dark',
+    'GMGN_LOCALE': 'ru',
+    '__cf_bm': '0Vb9k2JBpe4j8vcGOy0Z8xcMf0bQnRKapmslKEiJyoE-1754479128-1.0.1.1-2D0evNc9sdOOHR6iMfJ6GYpjAg_MLGCEryCIPBAGoVwRNyTzYFfbjfTQxbYpArWaYBlnfZRj.aWeBMgKJ6QTW2IG.9J1wIfxr.V7ihI9dn8',
+    'cf_clearance': 'LD3quk9qjrlEoSF1KnzdwcjAhPOTilUJ4jp5IwbkjKM-1754479131-1.2.1.1-lm8u4fKktDE.fyk8tFL3VA_uVriASa2HXJksDOmilOmh0sGEhcBvhqI4okECFxtzzZ_4PS5rk6c54cUuUQ8FpoZl79mq6JccTxA78lM9ofm34trB5xUtob_fVrFfLE4Eeloo51QHZY0KDPeT6DhmEqSK8i8X9Xens4dzZxlVhwi4Bt9YC7Tt0BBn.MwU8TGyJyf7FHmXDzLqzSBOB6JtcAB0siKhfiUd7_Pd3tgevCY',
+    'sid': 'gmgn%7Cf7f8c830566cb9109d1c29e9348ab59d',
+    '_ga_UGLVBMV4Z0': 'GS1.2.1754479132794930.67ff2258fe16dc4664041c17afaac8bb.DsZwhlX%2B4G5SoAz92KTwhg%3D%3D.ALRqPA86BuDIdbp0nW3kYA%3D%3D.5yPOR%2Fo0NaZDwOdiWBTURg%3D%3D.xnSHRg5GScVT%2BMNK2yxaeA%3D%3D',
+    '_ga_0XM0LYXGC8': 'GS2.1.s1754479099$o304$g1$t1754479100$j59$l0$h0',
 }
+
+headers = {
+    'accept': 'application/json, text/plain, */*',
+    'accept-language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    'baggage': 'sentry-environment=production,sentry-release=20250805-1994-2fe2cb8,sentry-public_key=93c25bab7246077dc3eb85b59d6e7d40,sentry-trace_id=a515c88cf2f64b9eb8e3dff9850906ef,sentry-sample_rate=0.01,sentry-sampled=false',
+    'priority': 'u=1, i',
+    'referer': 'https://gmgn.ai/sol/address/43DbKtri_Bw3reJNLgGzAksMMtamNvEYCEqm7oio2d5kUQwAAfB9P',
+    'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+    'sec-ch-ua-arch': '"x86"',
+    'sec-ch-ua-bitness': '"64"',
+    'sec-ch-ua-full-version': '"138.0.7204.184"',
+    'sec-ch-ua-full-version-list': '"Not)A;Brand";v="8.0.0.0", "Chromium";v="138.0.7204.184", "Google Chrome";v="138.0.7204.184"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-model': '""',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-ch-ua-platform-version': '"15.0.0"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    'sentry-trace': 'a515c88cf2f64b9eb8e3dff9850906ef-afa765c9e655c920-0',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+    'cookie': '_ga=GA1.1.1261906334.1735592964; GMGN_CHAIN=sol; GMGN_THEME=dark; GMGN_LOCALE=ru; __cf_bm=0Vb9k2JBpe4j8vcGOy0Z8xcMf0bQnRKapmslKEiJyoE-1754479128-1.0.1.1-2D0evNc9sdOOHR6iMfJ6GYpjAg_MLGCEryCIPBAGoVwRNyTzYFfbjfTQxbYpArWaYBlnfZRj.aWeBMgKJ6QTW2IG.9J1wIfxr.V7ihI9dn8; cf_clearance=LD3quk9qjrlEoSF1KnzdwcjAhPOTilUJ4jp5IwbkjKM-1754479131-1.2.1.1-lm8u4fKktDE.fyk8tFL3VA_uVriASa2HXJksDOmilOmh0sGEhcBvhqI4okECFxtzzZ_4PS5rk6c54cUuUQ8FpoZl79mq6JccTxA78lM9ofm34trB5xUtob_fVrFfLE4Eeloo51QHZY0KDPeT6DhmEqSK8i8X9Xens4dzZxlVhwi4Bt9YC7Tt0BBn.MwU8TGyJyf7FHmXDzLqzSBOB6JtcAB0siKhfiUd7_Pd3tgevCY; sid=gmgn%7Cf7f8c830566cb9109d1c29e9348ab59d; _ga_UGLVBMV4Z0=GS1.2.1754479132794930.67ff2258fe16dc4664041c17afaac8bb.DsZwhlX%2B4G5SoAz92KTwhg%3D%3D.ALRqPA86BuDIdbp0nW3kYA%3D%3D.5yPOR%2Fo0NaZDwOdiWBTURg%3D%3D.xnSHRg5GScVT%2BMNK2yxaeA%3D%3D; _ga_0XM0LYXGC8=GS2.1.s1754479099$o304$g1$t1754479100$j59$l0$h0',
+}
+
 params = {
-    "device_id": "c45e37f7-53ff-4d68-813b-fd0f7b736979",
-    "client_id": "gmgn_web_20250617-62-c04b007",
-    "from_app": "gmgn",
-    "app_ver": "20250617-62-c04b007",
-    "tz_name": "Europe/Moscow",
-    "tz_offset": "10800",
-    "app_lang": "ru",
-    "fp_did": "77abb27885cffbec63c7f9fbd35b4116",
-    "os": "web",
-    "limit": "50",
-    "orderby": "last_active_timestamp",
-    "direction": "desc",
-    "showsmall": "true",
-    "sellout": "true",
-    "tx30d": "true",
+    'device_id': 'c45e37f7-53ff-4d68-813b-fd0f7b736979',
+    'client_id': 'gmgn_web_20250805-1994-2fe2cb8',
+    'from_app': 'gmgn',
+    'app_ver': '20250805-1994-2fe2cb8',
+    'tz_name': 'Europe/Moscow',
+    'tz_offset': '10800',
+    'app_lang': 'ru',
+    'fp_did': '77abb27885cffbec63c7f9fbd35b4116',
+    'os': 'web',
+    'period': '7d',
 }
 
 # ──────────────────── HTTP fetch with retries ─────────────────────
@@ -81,6 +96,7 @@ def fetch_holdings(address: str, max_retry: int = 5) -> List[Dict[str, Any]]:
                 headers=headers | {"Referer": f"https://gmgn.ai/sol/address/{address}"},
                 params=params,
                 impersonate="chrome120",
+                cookies=cookies,
                 timeout=15,
             )
             rsp.raise_for_status()
@@ -89,7 +105,7 @@ def fetch_holdings(address: str, max_retry: int = 5) -> List[Dict[str, Any]]:
             attempt += 1
             if attempt >= max_retry:
                 raise RuntimeError(f"all retries failed ({max_retry}) – {exc}") from exc
-            time.sleep(1)
+            time.sleep(2)
 
 # ─────────────────────────── utils ────────────────────────────────
 
