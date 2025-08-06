@@ -21,7 +21,7 @@ SELENIUM_URL    = os.getenv("SELENIUM_SERVER_URL",
                              "http://selenium_testcap:4444/wd/hub")
 
 CAPTCHA_URL     = "https://gmgn.ai/new-pair"
-POST_PAGE_URL   = "https://gmgn.ai/sol/address/43DbKtri_Bw3reJNLgGzAksMMtamNvEYCEqm7oio2d5kUQwAAfB9P"
+POST_PAGE_URL   = "https://gmgn.ai/sol/address/Bw3reJNLgGzAksMMtamNvEYCEqm7oio2d5kUQwAAfB9P"
 WAIT_FOR_CLICK  = int(os.getenv("WAIT_FOR_CLICK", 30))
 
 # ─── Redis ───────────────────────────────────────────────────────────
