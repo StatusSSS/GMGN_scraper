@@ -69,7 +69,7 @@ while True:
         time.sleep(10)
 
 
-        driver.get(POST_PAGE_URL)
+        driver.refresh()
         time.sleep(15)
 
 
