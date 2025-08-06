@@ -177,6 +177,13 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
             "https": f"http://{user}:{pwd}@{host}:{port}",
         }
 
+    def proxy_ip(proxies):
+        try:
+            r = curl.get("https://api.ipify.org", proxies=proxies, timeout=10)
+            return r.text.strip()
+        except Exception:
+            return "n/a"
+
     proxies_dict = build_proxy_dict(proxy_str)
     url = f"https://gmgn.ai/api/v1/wallet_stat/sol/{wallet}/{API_PERIOD}"
 
@@ -189,7 +196,7 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
         ua[:80],
         ", ".join(c.split('=')[0] for c in cookie_hdr.split("; ")),
     )
-
+    print(proxy_ip(proxies_dict))
     for attempt in range(1, MAX_RETRIES + 1):
         headers, params = fp.pick_headers_params(proxy_str, 0)
         headers.update({
@@ -203,6 +210,17 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
             "Sec-Fetch-Dest": "empty",
             "X-Requested-With": "XMLHttpRequest",
         })
+
+        logger.debug(
+            "[REQ] proxy {} → {} | headers={} | params={}",
+            proxy_str, url,
+            {k: headers.get(k) for k in (
+                'User-Agent', 'Cookie', 'Origin',
+                'Sec-Fetch-Site', 'Sec-Fetch-Mode',
+                'Sec-Fetch-Dest', 'X-Requested-With'
+            )},
+            params,
+        )
 
 
         if headers.get("User-Agent") != ua:

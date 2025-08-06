@@ -81,5 +81,8 @@ while True:
         # печатаем в stderr, чтобы Docker-логи пометили как ERROR
         print(f"[ERR] {type(exc).__name__}: {exc}", file=sys.stderr)
     finally:
+        print("[SEL_HEADERS] UA=", driver.execute_script("return navigator.userAgent"))
+        print("[SEL_COOKIES] ",
+              {c['name']: c['value'] for c in driver.get_cookies()})
         driver.quit()
         print("➡️  next proxy…")
