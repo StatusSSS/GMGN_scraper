@@ -20,8 +20,10 @@ REDIS_PORT      = int(os.getenv("REDIS_PORT", 6379))
 SELENIUM_URL    = os.getenv("SELENIUM_SERVER_URL",
                              "http://selenium_testcap:4444/wd/hub")
 
-POST_PAGE_URL   = "https://gmgn.ai/sol/address/9NQn3TLma9sKd6pbBuXy5we6PMs6QLWAz8awhZyGNgmo"
-WAIT_FOR_CLICK  = int(os.getenv("WAIT_FOR_CLICK", 30))
+POST_PAGE_URL   = (
+    "https://gmgn.ai/sol/address/9NQn3TLma9sKd6pbBuXy5we6PMs6QLWAz8awhZyGNgmo"
+)                               # страница, на которую кликнет оператор
+WAIT_FOR_CLICK  = int(os.getenv("WAIT_FOR_CLICK", 30))   # секунд на ручной клик
 
 # ─── Redis ───────────────────────────────────────────────────────────
 rds = redis.Redis(REDIS_HOST, REDIS_PORT, decode_responses=True)
@@ -51,8 +53,10 @@ def build_opts(proxy: str, ua: str) -> Options:
 def save_cookies(proxy: str, ua: str, driver):
     payload = {"ua": ua, "cookies": driver.get_cookies()}
     rds.set(f"cookies:{proxy}", json.dumps(payload))
-    print(f"[SAVE] {proxy} ua={ua[:30]}… "
-          f"{[c['name'] for c in payload['cookies']]}")
+    print(
+        f"[SAVE] {proxy} ua={ua[:30]}… "
+        f"{[c['name'] for c in payload['cookies']]}"
+    )
 
 # ─── основной цикл ───────────────────────────────────────────────────
 while True:
@@ -63,22 +67,42 @@ while True:
 
     driver = webdriver.Remote(SELENIUM_URL, options=build_opts(proxy, ua))
     try:
-        # 1️⃣ Страница с капчей
+        # 1️⃣ Открываем страницу, оператор решает капчу / нажимает кнопку
         driver.get(POST_PAGE_URL)
         print(f"⏳  wait click ({WAIT_FOR_CLICK}s)…")
         time.sleep(WAIT_FOR_CLICK)
 
+        # 2️⃣ Добавляем три first-party куки GMGN вручную,
+        #    чтобы backend видел « Sol / dark / ru »
+        for name, val in {
+            "GMGN_CHAIN":  "sol",
+            "GMGN_THEME":  "dark",
+            "GMGN_LOCALE": "ru",
+        }.items():
+            try:
+                driver.add_cookie(
+                    {
+                        "name":   name,
+                        "value":  val,
+                        "domain": ".gmgn.ai",
+                        "path":   "/",
+                    }
+                )
+            except Exception:
+                # если кука уже есть — пропускаем
+                pass
 
+        # 3️⃣ Сохраняем полный набор кук в Redis
         save_cookies(proxy, ua, driver)
 
     except Exception as exc:
+        # печатаем в stderr, чтобы Docker-логи пометили как ERROR
         print(f"[ERR] {type(exc).__name__}: {exc}", file=sys.stderr)
 
     finally:
-        # Полный лог для отладки
         try:
-            print("[SEL_HEADERS] UA=", driver.execute_script(
-                "return navigator.userAgent"))
+            print("[SEL_HEADERS] UA=",
+                  driver.execute_script("return navigator.userAgent"))
             print("[SEL_COOKIES] ",
                   {c['name']: c['value'] for c in driver.get_cookies()})
         except Exception:
