@@ -176,7 +176,6 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
             "https": f"http://{user}:{pwd}@{host}:{port}",
         }
 
-
     # ── pre-calc ───────────────────────────────────────────────────
     proxies_dict = build_proxy_dict(proxy_str)
     url = f"https://gmgn.ai/api/v1/wallet_stat/sol/{wallet}/{API_PERIOD}"
@@ -187,9 +186,8 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
     logger.debug(
         "[UA/COOKIES] proxy {} ua={}… cookies={}",
         proxy_str, ua[:80],
-        ", ".join(c.split('=')[0] for c in cookie_hdr.split('; '))
+        ", ".join(c.split('=')[0] for c in cookie_hdr.split("; "))
     )
-
 
     # ── main loop ──────────────────────────────────────────────────
     for attempt in range(1, MAX_RETRIES + 1):
@@ -206,15 +204,15 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
             "X-Requested-With": "XMLHttpRequest",
         })
 
-        # 1️⃣ UA из cookies ↔ UA в запросе — одинаковый
+        # 1️⃣ UA из cookies ↔ UA в запросе
         headers["User-Agent"] = ua
 
-        # 2️⃣ /wallet_stat не понимает эти параметры → удаляем
-        for trash in (
-            "limit", "orderby", "direction",
-            "showsmall", "sellout", "tx30d", "period",
-        ):
+        # 2️⃣ /wallet_stat — оставляем только period, остальные фильтры убираем
+        for trash in ("limit", "orderby", "direction",
+                      "showsmall", "sellout", "tx30d"):
             params.pop(trash, None)
+
+        params["period"] = API_PERIOD            # ← вернуть period=7d
 
         logger.debug(
             "[REQ] proxy {} → {} | headers={} | params={}",
@@ -228,16 +226,17 @@ def fetch_wallet_stat(worker_id: int, wallet: str) -> Optional[dict]:
         )
         logger.debug("[UA OK] proxy {}", proxy_str)
 
+        # safety-check: все headers — str
         for k, v in headers.items():
             if not isinstance(v, str):
-                logger.error("Header not str: {} = {}", k, v)
+                logger.error("Header not str: %s = %r", k, v)
 
         try:
             resp = curl.get(
                 url,
                 params=params,
                 headers=headers,
-                impersonate="chrome120",
+                impersonate="chrome138",      # JA3 ⇆ UA-major = 138
                 timeout=API_TIMEOUT,
                 proxies=proxies_dict,
             )
