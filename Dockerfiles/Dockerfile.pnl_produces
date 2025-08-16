@@ -1,24 +1,25 @@
-# ----- базовый образ -------------------------------------------------
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
-# ----- системные пакеты (curl_cffi → libcurl) ------------------------
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN pip install --no-cache-dir playwright==1.47.0 \
+ && python -m playwright install --with-deps chromium ffmpeg
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        libcurl4-openssl-dev \
-        libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+    build-essential \
+    libcurl4-openssl-dev \
+    libssl-dev \
+ && rm -rf /var/lib/apt/lists/*
 
-# ----- рабочая папка -------------------------------------------------
 WORKDIR /src
-
-# ----- зависимости Python -------------------------------------------
 COPY ../requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ----- исходники -----------------------------------------------------
 COPY . .
 
-ENV PYTHONUNBUFFERED=1
-
-# Команда задаётся в docker-compose (producer/worker разные)
 CMD ["python", "-m", "src.pnl.pnl_producer"]
+
+
+
