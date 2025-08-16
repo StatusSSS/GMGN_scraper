@@ -25,21 +25,20 @@ services:
       start_period: 10s
 
   selenium_dex:
-    # лучше взять такой же “прибитый” образ, как в первом проекте
     image: selenium/standalone-chrome:138.0.7204.183-chromedriver-138.0.7204.183-grid-4.34.0-20250727
     container_name: selenium-dex
     shm_size: "2g"
     ports:
-      - "4445:4444"
+      - "4445:4444"   # вы подключаетесь к http://localhost:4445/wd/hub
       - "7901:7900"
     environment:
-      # ВАЖНО для Playwright+Grid: адрес, по которому узел регистрируется в хабе
-      # (в standalone это сам контейнер → localhost)
       - SE_NODE_GRID_URL=http://localhost:4444
-      # чтобы можно было смотреть noVNC, и некоторые антиботы вели себя мягче
       - SE_NODE_HEADLESS=false
-      # опционно, чтобы не пересекались сессии
       - SE_NODE_MAX_SESSIONS=1
+      # контейнерный прокси (опционально)
+      - http_proxy=http://t1d496:grovgA@178.171.42.135:9056
+      - https_proxy=http://t1d496:grovgA@178.171.42.135:9056
+      - no_proxy=localhost,127.0.0.1,selenium-dex
     healthcheck:
       test: [ "CMD-SHELL","curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'" ]
       interval: 5s
