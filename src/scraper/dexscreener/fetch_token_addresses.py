@@ -22,7 +22,7 @@ from src.sdk.queues.redis_connect import get_redis_sync as get_redis
 # ────────────────────────── Конфиг ──────────────────────────
 
 # Прокси формата: host:port:user:pass
-SEL_PROXY = os.getenv("SEL_PROXY", "178.171.42.135:9056:t1d496:grovgA")
+SEL_PROXY = os.getenv("SEL_PROXY", "5.8.13.246:9363:KsVAeX:8b12ZJ")
 
 # URL вашего Selenium Grid/Standalone
 # Если по compose из вопроса и запускаете со своего хоста: http://localhost:4445/wd/hub

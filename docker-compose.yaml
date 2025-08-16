@@ -36,8 +36,8 @@ services:
       - SE_NODE_HEADLESS=false
       - SE_NODE_MAX_SESSIONS=1
       # контейнерный прокси (опционально)
-      - http_proxy=http://t1d496:grovgA@178.171.42.135:9056
-      - https_proxy=http://t1d496:grovgA@178.171.42.135:9056
+      - http_proxy=http://KsVAeX:8b12ZJ@5.8.13.246:9363
+      - https_proxy=http://KsVAeX:8b12ZJ@5.8.13.246:9363
       - no_proxy=localhost,127.0.0.1,selenium-dex
     healthcheck:
       test: [ "CMD-SHELL","curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'" ]
