@@ -1,32 +1,24 @@
-# fetch_token_addresses.py
+# fetch_token_addresses.py  — Playwright + Selenium Grid
 from __future__ import annotations
 
 import os
 import sys
 import re
 import json
-import tempfile
-import zipfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import asyncio
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from playwright.async_api import async_playwright
 
 from src.sdk.queues.redis_connect import get_redis_sync as get_redis
 
 # ────────────────────────── Конфиг ──────────────────────────
 
-# Прокси формата: host:port:user:pass
-SEL_PROXY = os.getenv("SEL_PROXY", "5.8.13.246:9363:KsVAeX:8b12ZJ")
-
-# URL вашего Selenium Grid/Standalone
-# Если по compose из вопроса и запускаете со своего хоста: http://localhost:4445/wd/hub
-SELENIUM_SERVER_URL = os.getenv("SELENIUM_SERVER_URL", "http://localhost:4445/wd/hub")
+# NB: Прокси теперь настраиваем на уровне ноды Grid (env HTTP(S)_PROXY
+#     или через SELENIUM_REMOTE_CAPABILITIES), см. примечания ниже.
+SEL_PROXY = os.getenv("SEL_PROXY", "196.18.2.145:8000:ZvMv3G:3ySzNZ")
 
 # Очереди для раскладки токенов по источникам
 FLAG_QUEUES: Dict[str, str] = {
@@ -47,8 +39,15 @@ MAX_AGE_HOURS = int(os.getenv("MAX_AGE_HOURS", "24"))
 # Проверять внешний IP через прокси (GET https://api.ipify.org)
 CHECK_IP = os.getenv("CHECK_IP", "0") == "1"
 
-# Включить подробные сообщения Selenium/Chrome
-QUIET = os.getenv("QUIET", "1") == "1"
+# Делать браузер headful для работы через noVNC (обычно нужно True)
+HEADFUL = os.getenv("HEADFUL", "1") == "1"
+
+# Заводить persistent-контекст (обычно не требуется)
+PERSISTENT = os.getenv("PERSISTENT", "0") == "1"
+
+# Принудительно задать прокси на уровне Playwright (как правило,
+# при работе с Grid ЭТО НЕ НУЖНО и может игнорироваться нодой)
+FORCE_PLAYWRIGHT_PROXY = os.getenv("FORCE_PLAYWRIGHT_PROXY", "0") == "1"
 
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -63,115 +62,6 @@ def push_tokens(tokens: List[str], queue: str) -> None:
         print(f"🧹  Очистили очередь {queue}")
     rds.rpush(queue, *tokens)
     print(f"🚚  Отправили {len(tokens)} токенов → {queue}")
-
-# ────────────────────────── Proxy MV3 ───────────────────────
-
-def _parse_proxy(raw: str) -> Tuple[str, int, str, str]:
-    """host:port:user:pass → (host, port, user, pass)"""
-    host, port, user, pwd = raw.split(":", 3)
-    return host, int(port), user, pwd
-
-def _build_auth_proxy_extension_zip(host: str, port: int, user: str, pwd: str) -> str:
-    """
-    Создаёт временный ZIP c MV3-расширением Chrome, которое:
-      - задаёт fixed proxy (HTTP)
-      - отдаёт credentials в onAuthRequired
-    Возвращает путь к zip.
-    """
-    manifest = {
-        "name": "auth-proxy",
-        "version": "1.0",
-        "manifest_version": 3,
-        "permissions": [
-            "proxy",
-            "storage",
-            "webRequest",
-            "webRequestAuthProvider"
-        ],
-        "host_permissions": ["<all_urls>"],
-        "background": {"service_worker": "background.js"},
-        "minimum_chrome_version": "110"
-    }
-
-    background_js = f"""// generated
-chrome.proxy.settings.set({{
-  value: {{
-    mode: "fixed_servers",
-    rules: {{
-      singleProxy: {{ scheme: "http", host: "{host}", port: {port} }},
-      bypassList: ["localhost","127.0.0.1"]
-    }}
-  }},
-  scope: "regular"
-}}, () => {{}});
-
-// MV3: asyncBlocking для ввода логина/пароля
-chrome.webRequest.onAuthRequired.addListener(
-  (details, callback) => {{
-    callback({{authCredentials: {{username: "{user}", password: "{pwd}"}}}});
-  }},
-  {{ urls: ["<all_urls>"] }},
-  ["asyncBlocking"]
-);
-"""
-
-    tmpdir = tempfile.mkdtemp(prefix="pxyext_")
-    zippath = os.path.join(tmpdir, "proxy_auth_ext.zip")
-    with zipfile.ZipFile(zippath, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
-        z.writestr("background.js", background_js)
-    return zippath
-
-def _make_driver() -> WebDriver:
-    host, port, user, pwd = _parse_proxy(SEL_PROXY)
-    ext_zip = _build_auth_proxy_extension_zip(host, port, user, pwd)
-
-    opts = webdriver.ChromeOptions()
-
-    # Базовые флаги стабильности
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--disable-infobars")
-    opts.add_argument("--disable-features=BlockInsecurePrivateNetworkRequests")
-    opts.add_argument("--disable-quic")  # избегаем QUIC, чтобы трафик точно шёл через HTTP-прокси
-
-    # Можно добавить явный язык/UA при необходимости:
-    # opts.add_argument("--lang=ru-RU")
-
-    # Подключаем MV3-расширение с прокси-авторизацией
-    opts.add_extension(ext_zip)
-
-    if QUIET:
-        # Чуть тише логи дисплея/крошек
-        opts.add_experimental_option("excludeSwitches", ["enable-logging"])
-        opts.add_experimental_option("useAutomationExtension", False)
-
-    driver = webdriver.Remote(
-        command_executor=SELENIUM_SERVER_URL,
-        options=opts
-    )
-    return driver
-
-# ────────────────────────── Ожидания/страницы ───────────────
-
-def _wait_table(driver: WebDriver, timeout: int = 600):
-    """Ждём появления основной таблицы после капчи."""
-    sel = "div.ds-dex-table.ds-dex-table-top"
-    return WebDriverWait(driver, timeout).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, sel))
-    )
-
-def _check_ip(driver: WebDriver) -> None:
-    try:
-        driver.get("https://api.ipify.org?format=text")
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.TAG_NAME, "pre"))
-        )
-        ip = driver.find_element(By.TAG_NAME, "pre").text
-        print(f"[ip] {ip}")
-    except Exception as e:
-        print(f"[ip] check failed: {e}")
 
 # ────────────────────────── Парсер HTML ─────────────────────
 
@@ -188,15 +78,11 @@ def extract_tokens_by_flag(html: str, flags: List[str] = FLAGS) -> Dict[str, Lis
     flag_set = {f.lower() for f in flags}
 
     for row in soup.select("a.ds-dex-table-row"):
-        # Найдём, к какому источнику относится строка (по значку с title)
         titles = [img.get("title", "").strip().lower() for img in row.select("img[title]")]
         found = next((t for t in titles if t in flag_set), None)
         if not found:
             continue
-        # Нормализуем имя флага как в ключах словаря
         flag_found = next(f for f in flags if f.lower() == found)
-
-        # Ищем иконку токена → адрес в src
         icon = row.select_one("img.ds-dex-table-row-token-icon-img[src*='/tokens/solana/']")
         if not icon:
             continue
@@ -204,52 +90,92 @@ def extract_tokens_by_flag(html: str, flags: List[str] = FLAGS) -> Dict[str, Lis
         if m:
             result[flag_found].append(m.group(1))
 
-    # Убираем дубли, сохраняя порядок
     for flag, lst in result.items():
         result[flag] = list(dict.fromkeys(lst))
     return result
 
-# ────────────────────────── Скрейпер ────────────────────────
+# ────────────────────────── Скрейпер (Playwright) ───────────
 
-def run(max_age_hours: int, out_dir: Path) -> str:
+DEX_URL_TPL = (
+    "https://dexscreener.com/solana"
+    "?rankBy=trendingScoreH6&order=desc&minMarketCap=50000&maxAge={max_age}"
+)
+TABLE_SEL = "div.ds-dex-table.ds-dex-table-top"
+
+async def _check_ip(page) -> None:
+    try:
+        await page.goto("https://api.ipify.org?format=text", wait_until="domcontentloaded", timeout=30000)
+        txt = await page.evaluate("() => document.body.innerText || ''")
+        txt = (txt or "").strip().splitlines()[0] if txt else ""
+        print(f"[ip] {txt}")
+    except Exception as e:
+        print(f"[ip] check failed: {e}")
+
+def _parse_proxy(raw: str) -> Tuple[str, int, str, str]:
+    host, port, user, pwd = raw.split(":", 3)
+    return host, int(port), user, pwd
+
+async def run_async(max_age_hours: int, out_dir: Path) -> str:
     """
-    Открывает DexScreener, ждёт таблицу (после ручного решения капчи через VNC),
-    возвращает HTML таблицы.
+    Открывает DexScreener в браузере, поднятом через Selenium Grid.
+    Ждём таблицу (после ручного решения капчи через noVNC), сохраняем её HTML и возвращаем строкой.
     """
-    url = (
-        "https://dexscreener.com/solana"
-        f"?rankBy=trendingScoreH6&order=desc&minMarketCap=50000&maxAge={max_age_hours}"
-    )
+    url = DEX_URL_TPL.format(max_age=max_age_hours)
     print("[open]", url)
 
-    driver = _make_driver()
-    try:
-        if CHECK_IP:
-            _check_ip(driver)
+    # Взаимодействовать с Grid — просто обычный launch(); Playwright сам возьмёт SELENIUM_REMOTE_URL из env.
+    # См. официальную доку (experimental).  # noqa
+    # HEADS UP: работает только для Chromium/Edge.  # noqa
 
-        driver.get(url)
+    proxy_opt = None
+    if FORCE_PLAYWRIGHT_PROXY:
+        host, port, user, pwd = _parse_proxy(SEL_PROXY)
+        proxy_opt = {"server": f"http://{host}:{port}", "username": user, "password": pwd}
+
+    async with async_playwright() as p:
+        # 1) Браузер
+        # headless=False, чтобы видеть окно в noVNC
+        browser = await p.chromium.launch(headless=not HEADFUL, proxy=proxy_opt)
+
+        # 2) Контекст/страница
+        if PERSISTENT:
+            # persistent-профиль редко нужен; не включаем расширений
+            context = await browser.new_context(no_viewport=True, locale="ru-RU")
+        else:
+            context = await browser.new_context(no_viewport=True, locale="ru-RU")
+        page = await context.new_page()
+        page.set_default_timeout(600_000)  # до 10 минут (капча руками)
+
+        # 3) IP-проверка по желанию
+        if CHECK_IP:
+            await _check_ip(page)
+
+        # 4) DexScreener + ожидание таблицы
+        await page.goto(url, wait_until="domcontentloaded")
         print("[wait] Решите CAPTCHA в noVNC; ждём таблицу…")
-        table_el = _wait_table(driver)
+        await page.wait_for_selector(TABLE_SEL, state="attached", timeout=600_000)
+
+        # 5) Сохранить HTML
+        table_el = page.locator(TABLE_SEL).first
+        html = await table_el.evaluate("el => el.outerHTML")  # outerHTML таблицы
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        html = table_el.get_attribute("outerHTML") or ""
         (out_dir / "last_table.html").write_text(html, encoding="utf-8")
         print(f"[save] {out_dir / 'last_table.html'}")
-        return html
-    finally:
-        try:
-            driver.quit()
-        except Exception:
-            pass
+
+        await context.close()
+        await browser.close()
         print("[quit] browser closed")
+        return html
+
+def run(max_age_hours: int, out_dir: Path) -> str:
+    return asyncio.run(run_async(max_age_hours, out_dir))
 
 def run_and_push(max_age_hours: int, out_dir: Path) -> Dict[str, List[str]]:
     html = run(max_age_hours, out_dir)
     tokens_by_flag = extract_tokens_by_flag(html)
-
     for flag, tokens in tokens_by_flag.items():
         push_tokens(tokens, FLAG_QUEUES[flag])
-
     return tokens_by_flag
 
 # ────────────────────────── CLI ─────────────────────────────

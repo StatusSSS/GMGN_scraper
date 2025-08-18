@@ -47,14 +47,40 @@ services:
       start_period: 10s
 
 
+
   scraper:
     build: .
     depends_on:
       selenium_dex:
         condition: service_healthy
     environment:
-      - SELENIUM_SERVER_URL=http://selenium_dex:4444/wd/hub
-    volumes: ["./output:/app/output"]
+      SELENIUM_REMOTE_URL: http://selenium_dex:4444/wd/hub
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      SELENIUM_REMOTE_CAPABILITIES: >-
+        {
+          "browserName":"chrome",
+          "goog:chromeOptions":{
+            "args":[
+              "--disable-blink-features=AutomationControlled",
+              "--lang=ru-RU",
+              "--force-color-profile=srgb",
+              "--use-gl=swiftshader",
+              "--window-size=1400,900",
+              "--user-data-dir=/home/seluser/chrome-profile"
+            ],
+            "excludeSwitches":["enable-automation"],
+            "prefs":{"intl.accept_languages":"ru-RU,ru"}
+          },
+          "proxy":{
+            "proxyType":"manual",
+            "httpProxy":"196.18.2.145:8000",
+            "sslProxy":"196.18.2.145:8000"
+          }
+        }
+      DEBUG: pw:browser*
+      CHECK_IP: "1"
+    volumes:
+      - ./output:/app/output
 
 
   producer:
@@ -106,3 +132,4 @@ services:
 
 volumes:
   redis-data:
+
