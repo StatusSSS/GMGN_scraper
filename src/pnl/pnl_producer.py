@@ -36,7 +36,7 @@ QUEUE_FLAGS: Dict[str, str] = {
 }
 
 WALLETS_QUEUE       = os.getenv("WALLETS_QUEUE", "wallet_queue")
-RESET_WALLETS_QUEUE = os.getenv("RESET_WALLETS_QUEUE", "false").lower() in {"1", "true", "yes"}
+RESET_WALLETS_QUEUE = False
 CLEAR_MARKER_KEY    = os.getenv("CLEAR_MARKER_KEY", "wallet_queue_cleared")
 # Если зададите TTL, очистка «один раз» сможет повторяться после истечения TTL
 CLEAR_MARKER_TTL    = int(os.getenv("CLEAR_MARKER_TTL", "0"))  # сек, 0 = без TTL

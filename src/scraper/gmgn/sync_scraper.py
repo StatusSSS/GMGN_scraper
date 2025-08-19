@@ -1,4 +1,4 @@
-# sync_scraper.py  — Redis → локальный буфер (RAM) → обработка партиями
+# gmgn_multi_workers.py  (обновлён под Redis + DB)
 import os, sys
 import asyncio, time, random, secrets, uuid, hashlib, json
 import datetime as dt
@@ -7,16 +7,15 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 from urllib.parse import quote, urlparse
 from concurrent.futures import ThreadPoolExecutor
-from collections import deque
 
 from loguru import logger
 from playwright.async_api import async_playwright
 from curl_cffi import requests as curl
 
-# ── БД/Redis ─────────────────────────────────────────────────────────
+# ── добавлено для БД/Redis (как в sync_scraper) ──────────────────────
 from src.sdk.databases.postgres.dependency import with_db_session
 from src.sdk.databases.postgres.models import Wallet
-from src.sdk.queues.redis_connect import get_redis  # async клиент
+from src.sdk.queues.redis_connect import get_redis
 
 try:
     from zoneinfo import ZoneInfo
@@ -53,10 +52,10 @@ logger = logger.bind(app="gmgn")
 CHAIN = "sol"
 HOME_URL = f"https://gmgn.ai/?chain={CHAIN}"
 
-# очередь Redis, из которой забираем батчи кошельков
+# берём батчи из Redis
 QUEUE_NAME = os.getenv("REDIS_QUEUE", "wallet_queue")
 
-# Порог PnL для записи в БД
+# порог PnL для записи в БД
 PNL_MIN_THRESHOLD = float(os.getenv("PNL_MIN_THRESHOLD", "0.6"))
 
 # базовые query-параметры (уникализируем на воркера ниже)
@@ -71,15 +70,12 @@ PARAMS = {
 
 WAIT_CLEARANCE_SECONDS = 75
 HEADLESS = False
-SLEEP_BETWEEN_REQ = (3.0, 4.0)  # пауза между запросами каждого воркера
+SLEEP_BETWEEN_REQ = (3.0, 4.0)
 API_TEMPLATE = "https://gmgn.ai/api/v1/wallet_stat/{chain}/{wallet}/7d"
 
 COOKIE_REFRESH_JITTER = (1.0, 2.0)
 COOKIE_REFRESH_TIMEOUT = int(os.getenv("COOKIE_REFRESH_TIMEOUT", "180"))
 COOKIES_MAX_AGE_S = int(os.getenv("COOKIES_MAX_AGE_S", "1800"))
-
-# максимальное количество воркеров на батч (читаем из env, по умолчанию 20)
-GMGN_WORKERS_MAX = int(os.getenv("GMGN_WORKERS", "20"))
 
 UA_LIST = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
@@ -127,7 +123,7 @@ def headers_for_worker(idx: int, ua: str) -> Dict[str, str]:
         "origin": "https://gmgn.ai",
     }
 
-
+# ─── прокси ──────────────────────────────────────────────────────────
 PROXY_STRS = [
     "178.171.42.135:9056:t1d496:grovgA",
     "217.106.239.149:9890:Rte1x5:tmbgBn",
@@ -151,7 +147,7 @@ PROXY_STRS = [
     "212.102.144.39:9099:ep5rm9:gJvgf9",
 ]
 
-
+# ─── утилиты ─────────────────────────────────────────────────────────
 def split_evenly(items: List[str], n: int) -> List[List[str]]:
     if n <= 0:
         return [items]
@@ -374,7 +370,7 @@ async def fetch_cookies_for_worker(worker: Worker) -> Dict[str, str]:
 
             cookies_list = await context.cookies("https://gmgn.ai")
             cookies_dict = {c["name"]: c["value"] for c in cookies_list}
-            if "cf_clearance" in cookies_dict and cookies_dict["cf_clearance"]:\
+            if "cf_clearance" in cookies_dict and cookies_dict["cf_clearance"]:
                 log.success("cf_clearance получен")
             else:
                 log.warning("cf_clearance НЕ получен — работаем с тем, что есть")
@@ -440,6 +436,7 @@ async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session
         await db_session.flush()
         logger.success(f"Snapshot saved for {wallet} (PnL {pnl_value:.3f})")
     except Exception as e:
+        # допускаем уникальный индекс на address
         try:
             from sqlalchemy.exc import IntegrityError
             if isinstance(e, IntegrityError):
@@ -531,6 +528,7 @@ def run_worker_requests(worker: Worker) -> Tuple[str, Stats, List[Tuple[str, flo
                             else:
                                 sc2 = resp2.status_code
                                 if 200 <= sc2 < 300:
+                                    # ── PARSE + COLLECT POSITIVES ──
                                     try:
                                         data = resp2.json()
                                         pnl = (data or {}).get("data", {}).get("pnl")
@@ -559,6 +557,7 @@ def run_worker_requests(worker: Worker) -> Tuple[str, Stats, List[Tuple[str, flo
                     req_log.exception(f"Ошибка при обновлении cookies/смене UA: {e!r}")
 
             elif 200 <= sc < 300:
+                # ── PARSE + COLLECT POSITIVES ──
                 try:
                     data = resp.json()
                     pnl = (data or {}).get("data", {}).get("pnl")
@@ -627,8 +626,8 @@ async def process_batch(wallets: List[str], *, token: str = "batch"):
         return
 
     workers = build_workers()
-    NUM_WORKERS = min(GMGN_WORKERS_MAX, len(workers))
 
+    NUM_WORKERS = min(20, len(workers))
     parts = split_evenly(wallets, NUM_WORKERS)
     if len(workers) < NUM_WORKERS:
         logger.warning(f"workers={len(workers)} < {NUM_WORKERS}; часть частей не будет назначена.")
@@ -639,6 +638,7 @@ async def process_batch(wallets: List[str], *, token: str = "batch"):
     # ── СНАЧАЛА КУКИ ДЛЯ ВСЕХ ВОРКЕРОВ (ПО ОЧЕРЕДИ) ───────────────────
     selected = workers[:NUM_WORKERS]
     logger.info(f"Последовательный съём cookies для {len(selected)} воркеров...")
+    cookies_list: List[Dict[str, str]] = []
     for w in selected:
         try:
             c = await fetch_cookies_for_worker(w)   # строго последовательно
@@ -646,11 +646,12 @@ async def process_batch(wallets: List[str], *, token: str = "batch"):
             logger.bind(worker=w.name).exception(f"Ошибка при съёме cookies: {e!r}")
             c = {}
         c = c or {}
+        cookies_list.append(c)
         w.cookies = c
         w.cookies_ts = time.time() if w.cookies else 0.0
         if not w.cookies:
             logger.bind(worker=w.name).warning("Пустые cookies — возможны 403.")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5)  # мягкая пауза между воркерами (можно убрать)
 
     # ── ТЕПЕРЬ ЗАПУСКАЕМ HTTP-ОБРАБОТКУ ДЛЯ ВСЕХ ──────────────────────
     results: List[Tuple[str, Stats, List[Tuple[str, float]]]] = []
@@ -663,7 +664,7 @@ async def process_batch(wallets: List[str], *, token: str = "batch"):
             except Exception as e:
                 logger.exception(f"Исключение в пуле: {e!r}")
 
-    # ── свод + сохранение в БД ────────────────────────────────────────
+    # ── свод + сохранение в БД (как было) ─────────────────────────────
     total_stats = Stats()
     positives_all: List[Tuple[str, float]] = []
     for name, st, pos in results:
@@ -695,142 +696,27 @@ async def process_batch(wallets: List[str], *, token: str = "batch"):
         f"refreshes={total_stats.refreshes}, ua_switches={total_stats.ua_switches}, bytes={total_stats.bytes_rx}, "
         f"attempts={total_stats.attempts}, wallets_total={len(wallets)}, duration={_fmt_hms(elapsed)} ({elapsed:.1f}s)"
     )
-
-# ─── локальный буфер после Redis ─────────────────────────────────────
-LOCAL_BUFFER = os.getenv("LOCAL_BUFFER", "1").lower() in {"1", "true", "yes"}  # включён по умолчанию
-LOCAL_BATCH_SIZE = int(os.getenv("LOCAL_BATCH_SIZE", "5000"))                  # партия в обработку
-LOCAL_BUFFER_MAX_WALLETS = int(os.getenv("LOCAL_BUFFER_MAX_WALLETS", "600000"))# лимит RAM по кошелькам
-LOCAL_BUFFER_LOG_EVERY = int(os.getenv("LOCAL_BUFFER_LOG_EVERY", "5"))
-
-WALLETS_BUFFER: deque[list[str]] = deque()
-_BUFFER_WALLETS_CNT = 0  # суммарно кошельков в буфере
-_BUFFER_LOCK = asyncio.Lock()
-_BUFFER_NOT_EMPTY = asyncio.Condition(_BUFFER_LOCK)
-_BUFFER_NOT_FULL  = asyncio.Condition(_BUFFER_LOCK)
-
-def _extract_wallets_from_payload(raw) -> list[str]:
-    """Принимает payload после json.loads и возвращает List[str] кошельков."""
-    if isinstance(raw, dict):
-        wallets = raw.get("wallets", []) or []
-    else:
-        wallets = raw or []
-
-    wallets = [
-        (w.get("signing_wallet") if isinstance(w, dict) and "signing_wallet" in w else str(w))
-        for w in wallets
-    ]
-    wallets = [w.strip() for w in wallets if w]
-    wallets = list(dict.fromkeys(wallets))  # дедуп внутри сообщения
-    return wallets
-
-async def redis_prefetch_loop() -> None:
-    """
-    Быстро вытягивает сообщения из Redis и складывает их в память (WALLETS_BUFFER).
-    """
-    rds = get_redis()
-    log = logger.bind(src="prefetch")
-    log.success(f"Prefetch started: draining '{QUEUE_NAME}' → local buffer")
-
-    wait_ticks = 0
-    global _BUFFER_WALLETS_CNT
-    while True:
-        try:
-            popped = await rds.blpop(QUEUE_NAME, timeout=5)
-            if popped is None:
-                await asyncio.sleep(0.2)
-                continue
-
-            _key, payload = popped
-            try:
-                payload_text = payload.decode() if isinstance(payload, (bytes, bytearray)) else payload
-                raw = json.loads(payload_text)
-            except Exception as e:
-                log.exception(f"bad JSON from Redis: {e!r}")
-                continue
-
-            wallets = _extract_wallets_from_payload(raw)
-            if not wallets:
-                log.warning(f"empty/unknown payload: {raw}")
-                continue
-
-            # ждём место в буфере при переполнении
-            async with _BUFFER_LOCK:
-                while (_BUFFER_WALLETS_CNT + len(wallets)) > LOCAL_BUFFER_MAX_WALLETS:
-                    wait_ticks += 1
-                    if wait_ticks % max(1, LOCAL_BUFFER_LOG_EVERY) == 0:
-                        log.warning(
-                            f"buffer full: {_BUFFER_WALLETS_CNT}/{LOCAL_BUFFER_MAX_WALLETS} wallets — waiting..."
-                        )
-                    await _BUFFER_NOT_FULL.wait()
-
-                WALLETS_BUFFER.append(wallets)
-                _BUFFER_WALLETS_CNT += len(wallets)
-                _BUFFER_NOT_EMPTY.notify()
-
-            log.info(f"+{len(wallets)} wallets buffered | total={_BUFFER_WALLETS_CNT}")
-
-        except Exception as exc:
-            log.exception(f"prefetch error: {exc!r}")
-            await asyncio.sleep(1.0)
-
-async def local_buffer_consumer_loop() -> None:
-    """
-    Собирает партию до LOCAL_BATCH_SIZE из WALLETS_BUFFER и отправляет в process_batch().
-    """
-    log = logger.bind(src="consumer")
-    global _BUFFER_WALLETS_CNT
-    while True:
-        batch: list[str] = []
-        async with _BUFFER_LOCK:
-            while not WALLETS_BUFFER:
-                await _BUFFER_NOT_EMPTY.wait()
-
-            # набираем до LOCAL_BATCH_SIZE, разрезая голову при необходимости
-            while WALLETS_BUFFER and len(batch) < LOCAL_BATCH_SIZE:
-                cur = WALLETS_BUFFER[0]
-                need = LOCAL_BATCH_SIZE - len(batch)
-                if len(cur) <= need:
-                    batch.extend(cur)
-                    WALLETS_BUFFER.popleft()
-                    _BUFFER_WALLETS_CNT -= len(cur)
-                else:
-                    batch.extend(cur[:need])
-                    del cur[:need]
-                    _BUFFER_WALLETS_CNT -= need
-                _BUFFER_NOT_FULL.notify_all()
-
-        if not batch:
-            await asyncio.sleep(0.1)
-            continue
-
-        # на всякий случай уберём повторы в собранной партии
-        if len(batch) > 1:
-            batch = list(dict.fromkeys(batch))
-
-        token = f"buffer:{int(time.time())}"
-        log.info(f"→ process {len(batch)} wallets (buffer_total={_BUFFER_WALLETS_CNT})")
-        try:
-            await process_batch(batch, token=token)
-        except Exception as e:
-            logger.exception(f"process_batch failed: {e!r}")
-            # при желании можно вернуть партию назад (закомментировано):
-            # async with _BUFFER_LOCK:
-            #     WALLETS_BUFFER.appendleft(batch)
-            #     _BUFFER_WALLETS_CNT += len(batch)
-            await asyncio.sleep(1.0)
-
-# ─── старый прямой Redis-консюмер (на случай LOCAL_BUFFER=0) ─────────
+# ─── Redis-консюмер (бесконечный цикл) ───────────────────────────────
 async def redis_loop() -> None:
-    rds = get_redis()
-    logger.success(f"Worker started, queue '{QUEUE_NAME}' (direct mode)")
+    rds = get_redis()  # async Redis клиент
+    logger.success(f"Worker started, queue '{QUEUE_NAME}'")
 
     while True:
         try:
             _key, payload = await rds.blpop(QUEUE_NAME)
             raw = json.loads(payload)
 
-            wallets = _extract_wallets_from_payload(raw)
-            token   = raw.get("token", "unknown") if isinstance(raw, dict) else "legacy"
+            if isinstance(raw, dict):
+                wallets = raw.get("wallets", []) or []
+                token   = raw.get("token", "unknown")
+            else:
+                wallets = raw or []
+                token = "legacy"
+
+            # нормализуем строки
+            wallets = [w["signing_wallet"] if isinstance(w, dict) and "signing_wallet" in w else str(w) for w in wallets]
+            # фильтруем пустые
+            wallets = [w.strip() for w in wallets if w]
 
             if not wallets:
                 logger.warning(f"Пустое сообщение в очереди: {raw}")
@@ -844,18 +730,12 @@ async def redis_loop() -> None:
 
 # ─── entrypoint ──────────────────────────────────────────────────────
 async def main():
-    logger.info("Старт sync_scraper (Redis → локальный буфер → обработка)")
+    logger.info("Старт gmgn_multi_workers (режим Redis→GMGN→DB)")
     # инициализируем очередь обновлений cookies (параллелизм = 1)
     global COOKIE_QUEUE
     COOKIE_QUEUE = CookieRefreshQueue(asyncio.get_running_loop(), max_parallel=1)
-
-    if LOCAL_BUFFER:
-        await asyncio.gather(
-            redis_prefetch_loop(),
-            local_buffer_consumer_loop(),
-        )
-    else:
-        await redis_loop()
+    # запускаем консюмер очереди
+    await redis_loop()
 
 if __name__ == "__main__":
     asyncio.run(main())
