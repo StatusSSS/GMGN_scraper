@@ -116,6 +116,9 @@ services:
       - REDIS_PORT=6379
       - RESET_QUEUE=1
       - GMGN_WORKERS=1
+      - LOCAL_BUFFER=1
+      - LOCAL_BUFFER_MAX_WALLETS=600000
+      - LOCAL_BATCH_SIZE=5000
       - LOG_LEVEL=DEBUG
     volumes: [ "./:/src" ]
     depends_on:
