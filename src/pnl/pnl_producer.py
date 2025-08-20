@@ -38,12 +38,12 @@ QUEUE_FLAGS: Dict[str, str] = {
 WALLETS_QUEUE       = os.getenv("WALLETS_QUEUE", "wallet_queue")
 RESET_WALLETS_QUEUE = False
 CLEAR_MARKER_KEY    = os.getenv("CLEAR_MARKER_KEY", "wallet_queue_cleared")
-# Если зададите TTL, очистка «один раз» сможет повторяться после истечения TTL
-CLEAR_MARKER_TTL    = int(os.getenv("CLEAR_MARKER_TTL", "0"))  # сек, 0 = без TTL
+
+CLEAR_MARKER_TTL    = int(os.getenv("CLEAR_MARKER_TTL", "0"))
 
 BLPOP_TIMEOUT = int(os.getenv("BLPOP_TIMEOUT", "300"))
 DELAY_SEC     = float(os.getenv("DELAY_SEC", "0"))
-BATCH_SIZE    = int(os.getenv("WALLET_BATCH", "5000"))
+BATCH_SIZE    = int(os.getenv("WALLET_BATCH", "15000"))
 
 FETCHERS: Dict[str, Callable[[str], List[Any]]] = {
     "PumpSwap": fetch_pumpswap_pnl,

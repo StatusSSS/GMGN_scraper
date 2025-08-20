@@ -28,22 +28,16 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 def setup_logger():
     logger.remove()
+    # Только stderr — файл не пишем
     logger.add(
         sys.stderr,
         level=LOG_LEVEL,
         enqueue=True,
         backtrace=False,
+        colorize=True,
         format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | {level:<8} | {message} | {extra}",
     )
-    logger.add(
-        LOG_DIR / "gmgn_{time:YYYYMMDD}.log",
-        level="DEBUG",
-        serialize=True,
-        rotation="50 MB",
-        retention="7 days",
-        compression="zip",
-        enqueue=True,
-    )
+    # УБРАНО: file sink, чтобы не писать логи в файл
 
 setup_logger()
 logger = logger.bind(app="gmgn")
@@ -75,7 +69,7 @@ API_TEMPLATE = "https://gmgn.ai/api/v1/wallet_stat/{chain}/{wallet}/7d"
 
 COOKIE_REFRESH_JITTER = (1.0, 2.0)
 COOKIE_REFRESH_TIMEOUT = int(os.getenv("COOKIE_REFRESH_TIMEOUT", "180"))
-COOKIES_MAX_AGE_S = int(os.getenv("COOKIES_MAX_AGE_S", "1800"))
+COOKIES_MAX_AGE_S = int(os.getenv("COOKIES_MAX_AGE_S", "5400"))
 
 UA_LIST = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
@@ -382,6 +376,19 @@ async def fetch_cookies_for_worker(worker: Worker) -> Dict[str, str]:
                 pass
 
 # ─── HTTP helpers ───────────────────────────────────────────────────
+
+# Новые настройки для управления логами успешных 2xx
+SUCCESS_LOG_SAMPLE_RATE = float(os.getenv("SUCCESS_LOG_SAMPLE_RATE", "0.02"))
+SUCCESS_LOG_SLOW_MS = float(os.getenv("SUCCESS_LOG_SLOW_MS", "1500"))
+
+def maybe_log_success(log, sc: int, dt_ms: float, resp_len: int):
+    """Логировать успешный ответ только если включён сэмплинг или он медленный."""
+    if SUCCESS_LOG_SLOW_MS and dt_ms >= SUCCESS_LOG_SLOW_MS:
+        log.bind(slow=True).info(f"{sc} OK in {dt_ms:.0f} ms, bytes={resp_len}")
+    elif SUCCESS_LOG_SAMPLE_RATE and random.random() < SUCCESS_LOG_SAMPLE_RATE:
+        log.bind(sample=True).info(f"{sc} OK in {dt_ms:.0f} ms, bytes={resp_len}")
+    # иначе — молчим, чтобы не спамить
+
 def ensure_browser_like_headers(sess):
     sess.headers.setdefault("sec-fetch-site", "same-origin")
     sess.headers.setdefault("sec-fetch-mode", "cors")
@@ -398,7 +405,8 @@ def get_with_retry(sess, url, params, log, cookies, max_attempts=3, sleep_base=2
             sc = resp.status_code
             log_attempt = log.bind(attempt=attempt)
             if 200 <= sc < 300:
-                log_attempt.success(f"{sc} OK in {dt:.0f} ms, bytes={len(resp.content)}")
+                # отключаем спам успешных запросов (сэмплим/логируем только медленные при желании)
+                maybe_log_success(log_attempt, sc, dt, len(resp.content))
                 return resp
             elif sc == 403:
                 log_attempt.warning(f"{sc} FORBIDDEN in {dt:.0f} ms")
