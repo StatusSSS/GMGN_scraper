@@ -1,18 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-Скоринг Solana‑кошельков (gmgn.ai) с сохранением результата в таблицу **wallet_snapshot**.
-
-Что делает скрипт:
-1. Берёт адреса из справочника `wallets` (модель `Wallet`).
-2. Для каждого адреса запрашивает историю холдингов на gmgn.ai.
-3. Считает 14+ метрик + суммарный PnL.
-4. Печатает короткий JSON в stdout (как раньше) **и** вставляет запись
-   в `wallet_snapshot` (модель `WalletSnapshot`).
-
-Запуск:
-    python score_solana_wallets.py --delay 0.5 [--limit 100]
-"""
 from __future__ import annotations
 
 import argparse
@@ -28,12 +13,11 @@ from curl_cffi import requests as curl
 from curl_cffi.requests.errors import CurlError
 from sqlalchemy import select
 
-# ────────────────────────── DB imports ────────────────────────────
-# ⚠️  Замените пути импорта на те, что используются у вас в проекте
-from src.sdk.databases.postgres.dependency import AsyncSessionLocal  # пул соединений
-from src.sdk.databases.postgres.models import Wallet, WalletSnapshot                     # модели
 
-# ────────────────────────── HTTP consts ───────────────────────────
+from src.sdk.databases.postgres.dependency import AsyncSessionLocal
+from src.sdk.databases.postgres.models import Wallet, WalletSnapshot
+
+
 GMGN_ENDPOINT = "https://gmgn.ai/api/v1/wallet_holdings/sol/{address}"
 
 cookies = {
@@ -203,7 +187,7 @@ def calc_quality(data: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "pnl": round(total_pnl, 2),
     }
 
-# ───────────────────────── orchestrator ──────────────────────────
+
 
 def analyse_wallet(addr: str) -> Dict[str, Any]:
     data = fetch_holdings(addr)
@@ -216,7 +200,7 @@ def analyse_wallet(addr: str) -> Dict[str, Any]:
         **qual,
     }
 
-# ────────────────── addresses loader from DB ─────────────────────
+
 
 async def load_wallet_addresses(limit: int | None = None) -> List[str]:
     """Возвращает адреса из таблицы `wallets` (ordered by id)."""
@@ -227,7 +211,6 @@ async def load_wallet_addresses(limit: int | None = None) -> List[str]:
             addresses = addresses[:limit]
         return addresses
 
-# ───────────────────── snapshot persister ────────────────────────
 
 def build_snapshot(row: Dict[str, Any]) -> WalletSnapshot:
     """Преобразует словарь метрик в объект WalletSnapshot."""
@@ -251,7 +234,7 @@ def build_snapshot(row: Dict[str, Any]) -> WalletSnapshot:
         pnl                  = row["pnl"],
     )
 
-# ───────────────────────────── main ───────────────────────────────
+
 
 async def main_async(limit: int | None, delay: float) -> None:
     try:
@@ -262,7 +245,7 @@ async def main_async(limit: int | None, delay: float) -> None:
     if not wallets:
         sys.exit("Список кошельков пуст — нечего анализировать")
 
-    # какие поля выводить в stdout
+
     KEYS = [
         "address",
         "profit_factor",
@@ -287,11 +270,11 @@ async def main_async(limit: int | None, delay: float) -> None:
             try:
                 full: Dict[str, Any] = await asyncio.to_thread(analyse_wallet, addr)
 
-                # печать в stdout остаётся для совместимости
+
                 out = {k: full.get(k) for k in KEYS}
                 print(json.dumps(out, ensure_ascii=False), flush=True)
 
-                # сохранение в БД
+
                 snapshot = build_snapshot(full)
                 session.add(snapshot)
                 await session.commit()

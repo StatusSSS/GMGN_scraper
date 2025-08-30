@@ -1,55 +1,76 @@
 services:
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     ports: ["6379:6379"]
-    volumes: [redis-data:/data]
+    volumes:
+      - redis-data:/data
 
-
-  selenium_gmgn:
+  # ───────────── Selenium (pnl) ─────────────
+  selenium_pnl_gmgn:
     image: selenium/standalone-chrome:138.0.7204.183-chromedriver-138.0.7204.183-grid-4.34.0-20250727
-    container_name: selenium-gmgn
+    container_name: selenium-gmgn-pnl
     shm_size: "2g"
+    restart: unless-stopped
     ports:
       - "4444:4444"
       - "7900:7900"
     environment:
       - SE_NODE_HEADLESS=false
-      - SE_NODE_GRID_URL=http://localhost:4444
+      - SE_NODE_MAX_SESSIONS=1
     healthcheck:
-      test: [ "CMD-SHELL","curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'" ]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'"]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 10s
 
+  # ───────────── Selenium (holdings) ─────────────
+  selenium_holdings_gmgn:
+    image: selenium/standalone-chrome:138.0.7204.183-chromedriver-138.0.7204.183-grid-4.34.0-20250727
+    container_name: selenium-gmgn-holdings
+    shm_size: "2g"
+    restart: unless-stopped
+    ports:
+      - "4446:4444"   # внешний порт 4446 → внутри 4444
+      - "7902:7900"
+    environment:
+      - SE_NODE_HEADLESS=false
+      - SE_NODE_MAX_SESSIONS=1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  # ───────────── Selenium (dex) ─────────────
   selenium_dex:
     image: selenium/standalone-chrome:138.0.7204.183-chromedriver-138.0.7204.183-grid-4.34.0-20250727
     container_name: selenium-dex
     shm_size: "2g"
+    restart: unless-stopped
     ports:
-      - "4445:4444"   # вы подключаетесь к http://localhost:4445/wd/hub
+      - "4445:4444"   # подключение к http://localhost:4445/wd/hub
       - "7901:7900"
     environment:
-      - SE_NODE_GRID_URL=http://localhost:4444
       - SE_NODE_HEADLESS=false
       - SE_NODE_MAX_SESSIONS=1
-      # контейнерный прокси (опционально)
+      # контейнерный прокси (опционально; для самого контейнера)
       - http_proxy=http://KsVAeX:8b12ZJ@5.8.13.246:9363
       - https_proxy=http://KsVAeX:8b12ZJ@5.8.13.246:9363
       - no_proxy=localhost,127.0.0.1,selenium-dex
     healthcheck:
-      test: [ "CMD-SHELL","curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'" ]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4444/status | grep -q '\"ready\": *true'"]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 10s
 
-
-
+  # ───────────── Вспомогательный scraper (если нужен для dex) ─────────────
   scraper:
     build: .
+    restart: unless-stopped
     depends_on:
       selenium_dex:
         condition: service_healthy
@@ -73,8 +94,8 @@ services:
           },
           "proxy":{
             "proxyType":"manual",
-            "httpProxy": "ZvMv3G:3ySzNZ@196.18.2.145:8000",
-            "sslProxy":  "ZvMv3G:3ySzNZ@196.18.2.145:8000"
+            "httpProxy":"ZvMv3G:3ySzNZ@196.18.2.145:8000",
+            "sslProxy":"ZvMv3G:3ySzNZ@196.18.2.145:8000"
           }
         }
       DEBUG: pw:browser*
@@ -82,12 +103,13 @@ services:
     volumes:
       - ./output:/app/output
 
-
+  # ───────────── Producer (pnl queue) ─────────────
   producer:
     build:
       context: .
       dockerfile: Dockerfiles/Dockerfile.pnl_produces
     command: python -m src.pnl.pnl_producer
+    restart: unless-stopped
     environment:
       CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
       CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
@@ -97,33 +119,54 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       DELAY_SEC: ${DELAY_SEC:-10}
-    volumes: ["./:/src"]
-    depends_on: [redis]
-
-
-
-  worker:
-    build:
-      context: .
-      dockerfile: ./Dockerfiles/Dockerfile.pnl_produces
-    command: python -m src.scraper.gmgn.sync_scraper
-    environment:
-      - SELENIUM_REMOTE_URL=http://selenium_gmgn:4444
-      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-      - DEBUG=pw:browser*
-      - PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - GMGN_WORKERS=1
-      - LOCAL_BUFFER=1
-      - LOCAL_BUFFER_MAX_WALLETS=600000
-      - LOCAL_BATCH_SIZE=5000
-      - LOG_LEVEL=DEBUG
-    volumes: [ "./:/src" ]
+    volumes:
+      - ./:/src
     depends_on:
       redis:
         condition: service_started
-      selenium_gmgn: # ← сюда!
+
+  # ───────────── Worker PnL ─────────────
+  worker_pnl:
+    build:
+      context: .
+      dockerfile: ./Dockerfiles/Dockerfile.pnl_produces
+    command: python -m src.scraper.gmgn.pnl_scraper
+    restart: unless-stopped
+    environment:
+      SELENIUM_REMOTE_URL: http://selenium_pnl_gmgn:4444/wd/hub
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      DEBUG: pw:browser*
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      GMGN_WORKERS: 1
+      LOCAL_BUFFER: 1
+      LOCAL_BUFFER_MAX_WALLETS: 600000
+      LOCAL_BATCH_SIZE: 5000
+      LOG_LEVEL: DEBUG
+      # При необходимости тот же набор remote capabilities и прокси, что и в "scraper":
+      SELENIUM_REMOTE_CAPABILITIES: >-
+        {
+          "browserName":"chrome",
+          "goog:chromeOptions":{
+            "args":[
+              "--disable-blink-features=AutomationControlled",
+              "--lang=ru-RU",
+              "--force-color-profile=srgb",
+              "--use-gl=swiftshader",
+              "--window-size=1400,900",
+              "--user-data-dir=/home/seluser/chrome-profile"
+            ],
+            "excludeSwitches":["enable-automation"],
+            "prefs":{"intl.accept_languages":"ru-RU,ru"}
+          }
+        }
+    volumes:
+      - ./:/src
+    depends_on:
+      redis:
+        condition: service_started
+      selenium_pnl_gmgn:
         condition: service_healthy
     logging:
       driver: json-file
@@ -131,7 +174,26 @@ services:
         max-size: "10m"
         max-file: "1"
 
+  worker_holdings:
+    build:
+      context: .
+      dockerfile: ./Dockerfiles/Dockerfile.holdings_scraper
+    restart: unless-stopped
+    environment:
+      SELENIUM_REMOTE_URL: http://selenium_holdings_gmgn:4444/wd/hub
+      GMGN_WORKERS: "5"
+      LOG_LEVEL: INFO            # поменяй на DEBUG, если нужно подробнее
+      # PROXY_LIST: "host:port:user:pass,host:port:user:pass,..."  # опционально, если хочешь задать список явно
+    volumes:
+      - ./:/src
+    depends_on:
+      selenium_holdings_gmgn:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "1"
 
 volumes:
   redis-data:
-

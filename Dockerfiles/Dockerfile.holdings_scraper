@@ -1,0 +1,33 @@
+# Dockerfiles/Dockerfile.holdings_scraper
+FROM python:3.11-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# ОС-зависимости для curl_cffi и друзей
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      libcurl4-openssl-dev \
+      libssl-dev \
+      curl \
+  && rm -rf /var/lib/apt/lists/*
+
+# Playwright + браузер (для съёма cookies cf_clearance как в pnl)
+RUN pip install --no-cache-dir playwright==1.47.0 \
+ && python -m playwright install --with-deps chromium ffmpeg
+
+WORKDIR /src
+
+# requirements должен лежать в КОРНЕ контекста (.)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Код
+COPY . .
+
+
+
+# Запуск holdings-скрейпера (можно убрать из compose)
+CMD ["python", "-m", "src.scraper.gmgn.holdings_scraper"]

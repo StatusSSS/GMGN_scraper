@@ -1,4 +1,4 @@
-# gmgn_multi_workers.py  (обновлён под Redis + DB)
+# pnl_scraper.py — версия как sync_scraper + логи очереди Redis (BLPOP timeout, длина очереди)
 import os, sys
 import asyncio, time, random, secrets, uuid, hashlib, json
 import datetime as dt
@@ -12,7 +12,7 @@ from loguru import logger
 from playwright.async_api import async_playwright
 from curl_cffi import requests as curl
 
-# ── добавлено для БД/Redis (как в sync_scraper) ──────────────────────
+# ── БД и Redis ───────────────────────────────────────────────────────
 from src.sdk.databases.postgres.dependency import with_db_session
 from src.sdk.databases.postgres.models import Wallet
 from src.sdk.queues.redis_connect import get_redis
@@ -28,7 +28,6 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 def setup_logger():
     logger.remove()
-    # Только stderr — файл не пишем
     logger.add(
         sys.stderr,
         level=LOG_LEVEL,
@@ -37,7 +36,6 @@ def setup_logger():
         colorize=True,
         format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | {level:<8} | {message} | {extra}",
     )
-    # УБРАНО: file sink, чтобы не писать логи в файл
 
 setup_logger()
 logger = logger.bind(app="gmgn")
@@ -46,13 +44,15 @@ logger = logger.bind(app="gmgn")
 CHAIN = "sol"
 HOME_URL = f"https://gmgn.ai/?chain={CHAIN}"
 
-# берём батчи из Redis
+# Очередь и её логи
 QUEUE_NAME = os.getenv("REDIS_QUEUE", "wallet_queue")
+REDIS_BLPOP_TIMEOUT = int(os.getenv("REDIS_BLPOP_TIMEOUT", "120"))  # таймаут BLPOP (сек)
+LOG_QUEUE_STATS = os.getenv("LOG_QUEUE_STATS", "1") not in ("0", "false", "False")
 
-# порог PnL для записи в БД
+# Порог PnL для записи в БД
 PNL_MIN_THRESHOLD = float(os.getenv("PNL_MIN_THRESHOLD", "0.6"))
 
-# базовые query-параметры (уникализируем на воркера ниже)
+# Базовые query-параметры (уникализируем на воркера ниже)
 PARAMS = {
     "from_app": "gmgn",
     "os": "web",
@@ -79,12 +79,12 @@ UA_LIST = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:138.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_7_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 11_7_10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:138.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
@@ -257,13 +257,11 @@ def _tz_offset_seconds(tz_name: str, fallback_seconds: int = 0) -> int:
 def _gen_ids(seed_bytes: bytes | None = None) -> tuple[str, str, str, str]:
     if seed_bytes is None:
         seed_bytes = secrets.token_bytes(16)
-
     device_id = str(uuid.uuid4())
     ts = dt.datetime.now(dt.UTC).strftime("%Y%m%d-%H%M")
     rand8 = secrets.token_hex(4)
     client_id = f"gmgn_web_{ts}-{rand8}"
     app_ver = client_id
-
     fp_material = device_id.encode() + seed_bytes
     fp_did = hashlib.md5(fp_material).hexdigest()
     return device_id, client_id, app_ver, fp_did
@@ -277,7 +275,6 @@ def make_worker_params(base: dict, worker_idx: int, ua: str,
     except Exception:
         fallback = 0
     tz_off = _tz_offset_seconds(tz_name, fallback_seconds=fallback)
-
     params = base.copy()
     params.update({
         "device_id": device_id,
@@ -376,18 +373,14 @@ async def fetch_cookies_for_worker(worker: Worker) -> Dict[str, str]:
                 pass
 
 # ─── HTTP helpers ───────────────────────────────────────────────────
-
-# Новые настройки для управления логами успешных 2xx
 SUCCESS_LOG_SAMPLE_RATE = float(os.getenv("SUCCESS_LOG_SAMPLE_RATE", "0.02"))
 SUCCESS_LOG_SLOW_MS = float(os.getenv("SUCCESS_LOG_SLOW_MS", "1500"))
 
 def maybe_log_success(log, sc: int, dt_ms: float, resp_len: int):
-    """Логировать успешный ответ только если включён сэмплинг или он медленный."""
     if SUCCESS_LOG_SLOW_MS and dt_ms >= SUCCESS_LOG_SLOW_MS:
         log.bind(slow=True).info(f"{sc} OK in {dt_ms:.0f} ms, bytes={resp_len}")
     elif SUCCESS_LOG_SAMPLE_RATE and random.random() < SUCCESS_LOG_SAMPLE_RATE:
         log.bind(sample=True).info(f"{sc} OK in {dt_ms:.0f} ms, bytes={resp_len}")
-    # иначе — молчим, чтобы не спамить
 
 def ensure_browser_like_headers(sess):
     sess.headers.setdefault("sec-fetch-site", "same-origin")
@@ -405,7 +398,6 @@ def get_with_retry(sess, url, params, log, cookies, max_attempts=3, sleep_base=2
             sc = resp.status_code
             log_attempt = log.bind(attempt=attempt)
             if 200 <= sc < 300:
-                # отключаем спам успешных запросов (сэмплим/логируем только медленные при желании)
                 maybe_log_success(log_attempt, sc, dt, len(resp.content))
                 return resp
             elif sc == 403:
@@ -444,7 +436,6 @@ async def save_snapshot_if_positive(wallet: str, pnl_value: float, *, db_session
         await db_session.flush()
         logger.success(f"Snapshot saved for {wallet} (PnL {pnl_value:.3f})")
     except Exception as e:
-        # допускаем уникальный индекс на address
         try:
             from sqlalchemy.exc import IntegrityError
             if isinstance(e, IntegrityError):
@@ -536,7 +527,6 @@ def run_worker_requests(worker: Worker) -> Tuple[str, Stats, List[Tuple[str, flo
                             else:
                                 sc2 = resp2.status_code
                                 if 200 <= sc2 < 300:
-                                    # ── PARSE + COLLECT POSITIVES ──
                                     try:
                                         data = resp2.json()
                                         pnl = (data or {}).get("data", {}).get("pnl")
@@ -565,7 +555,6 @@ def run_worker_requests(worker: Worker) -> Tuple[str, Stats, List[Tuple[str, flo
                     req_log.exception(f"Ошибка при обновлении cookies/смене UA: {e!r}")
 
             elif 200 <= sc < 300:
-                # ── PARSE + COLLECT POSITIVES ──
                 try:
                     data = resp.json()
                     pnl = (data or {}).get("data", {}).get("pnl")
@@ -625,6 +614,7 @@ def _fmt_hms(seconds: float) -> str:
     m, s = divmod(s, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
+# ─── обработка батча (как в sync_scraper: cookies строго последовательно) ───────
 async def process_batch(wallets: List[str], *, token: str = "batch"):
     t_start = time.perf_counter()
 
@@ -659,7 +649,7 @@ async def process_batch(wallets: List[str], *, token: str = "batch"):
         w.cookies_ts = time.time() if w.cookies else 0.0
         if not w.cookies:
             logger.bind(worker=w.name).warning("Пустые cookies — возможны 403.")
-        await asyncio.sleep(0.5)  # мягкая пауза между воркерами (можно убрать)
+        await asyncio.sleep(0.5)  # мягкая пауза между воркерами (как в sync)
 
     # ── ТЕПЕРЬ ЗАПУСКАЕМ HTTP-ОБРАБОТКУ ДЛЯ ВСЕХ ──────────────────────
     results: List[Tuple[str, Stats, List[Tuple[str, float]]]] = []
@@ -672,7 +662,7 @@ async def process_batch(wallets: List[str], *, token: str = "batch"):
             except Exception as e:
                 logger.exception(f"Исключение в пуле: {e!r}")
 
-    # ── свод + сохранение в БД (как было) ─────────────────────────────
+    # ── свод + сохранение в БД ────────────────────────────────────────
     total_stats = Stats()
     positives_all: List[Tuple[str, float]] = []
     for name, st, pos in results:
@@ -704,14 +694,40 @@ async def process_batch(wallets: List[str], *, token: str = "batch"):
         f"refreshes={total_stats.refreshes}, ua_switches={total_stats.ua_switches}, bytes={total_stats.bytes_rx}, "
         f"attempts={total_stats.attempts}, wallets_total={len(wallets)}, duration={_fmt_hms(elapsed)} ({elapsed:.1f}s)"
     )
-# ─── Redis-консюмер (бесконечный цикл) ───────────────────────────────
+
+# ─── Redis-консюмер (с логами длины очереди и таймаутом BLPOP) ───────
+async def _llen_safe(rds, key: str) -> int:
+    try:
+        v = await rds.llen(key)
+        return int(v)
+    except Exception:
+        return -1
+
 async def redis_loop() -> None:
     rds = get_redis()  # async Redis клиент
     logger.success(f"Worker started, queue '{QUEUE_NAME}'")
 
     while True:
         try:
-            _key, payload = await rds.blpop(QUEUE_NAME)
+            if LOG_QUEUE_STATS:
+                qlen_before = await _llen_safe(rds, QUEUE_NAME)
+                logger.bind(queue=QUEUE_NAME).info(f"BLPOP ожидает... {QUEUE_NAME} len={qlen_before}")
+
+            popped = await rds.blpop(QUEUE_NAME, timeout=REDIS_BLPOP_TIMEOUT)
+            if popped is None:
+                if LOG_QUEUE_STATS:
+                    qlen_now = await _llen_safe(rds, QUEUE_NAME)
+                    logger.bind(queue=QUEUE_NAME).warning(
+                        f"BLPOP timeout {REDIS_BLPOP_TIMEOUT}s — очередь пуста? len={qlen_now}"
+                    )
+                continue
+
+            _key, payload = popped
+
+            if LOG_QUEUE_STATS:
+                qlen_after = await _llen_safe(rds, QUEUE_NAME)
+                logger.bind(queue=QUEUE_NAME).info(f"Взяли батч. Остаток {QUEUE_NAME} len={qlen_after}")
+
             raw = json.loads(payload)
 
             if isinstance(raw, dict):
@@ -731,6 +747,10 @@ async def redis_loop() -> None:
                 continue
 
             await process_batch(wallets, token=token)
+
+            if LOG_QUEUE_STATS:
+                qlen_post = await _llen_safe(rds, QUEUE_NAME)
+                logger.bind(queue=QUEUE_NAME).info(f"Батч завершён. Текущий {QUEUE_NAME} len={qlen_post}")
 
         except Exception as exc:
             logger.exception(f"redis_loop error: {exc!r}")
